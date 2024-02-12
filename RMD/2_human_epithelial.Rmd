@@ -1,0 +1,401 @@
+---
+title: "Human Peripheral Zone Epithelial Subset"
+author: "Mindy Kim Graham"
+date: "4/21/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Human Subjects Aggregated Prostatectomy Study Epithelial Subset
+To better define the epithelial subsets from the human prostatectomy dataset, the epithelial cell clusters (luminal and basal) were subsetted. Dimensionality reduction and clustering analysis was performed.
+```{r}
+# Libraries
+library(Seurat)
+library(ggplot2)
+library(sctransform)
+library(glmGamPoi)
+library(RColorBrewer)
+library(ggsci)
+library(viridis)
+library(dplyr)
+
+# set working directory
+wrkdir <- "C:/Users/mgraha21/OneDrive - Johns Hopkins/Mindy JHMI Onedrive/MYC prostate scRNAseq/Manuscript Version of Analysis/Github uploads" #update specific to user
+setwd(wrkdir)
+```
+# load complete aggregated prostatectomy dataset
+```
+# load seurat object
+seurat_object <- readRDS(file = "seurat_prostatectomy.rds")
+
+Idents(seurat_object) <- "cell_type"
+DimPlot(seurat_object)
+```
+
+# subset to epithelial cells, sctransform, dimensionality reduction
+refer to https://satijalab.org/seurat/articles/sctransform_vignette.html
+```
+# subset for epithelial cells
+seurat_epi <- subset(seurat_object, idents = c("Luminal", "Basal"))
+DimPlot(seurat_epi)
+
+# sctransform
+seurat_epi <- SCTransform(seurat_epi, method = "glmGamPoi", verbose = FALSE, return.only.var.genes = FALSE, vst.flavor = "v2")
+
+# dimensionality reduction
+seurat_epi <- RunPCA(seurat_epi, verbose = FALSE)
+seurat_epi <- RunUMAP(seurat_epi, reduction = "pca", dims = 1:30)
+seurat_epi <- FindNeighbors(seurat_epi, dims = 1:50, verbose = FALSE)
+
+DimPlot(seurat_epi, group.by = "cell_type")
+Subject_plot <- DimPlot(seurat_epi, group.by = "Subject", shuffle = TRUE, raster = TRUE)
+Subject_plot
+
+seurat_epi$tissue_type <- seurat_epi$Tissue
+seurat_epi$tissue_type <- gsub("Cancer", "Cancer enriched", seurat_epi$tissue_type)
+seurat_epi$tissue_type <- gsub("Peripheral", "Benign enriched", seurat_epi$tissue_type)
+Tissue_plot <- DimPlot(seurat_epi, group.by = "tissue_type", shuffle = TRUE, cols = c("#00afbb", "#e7b800")) + ggtitle("Tissue") 
+Tissue_plot
+
+# cluster resolution
+seurat_epi <- FindClusters(seurat_epi, verbose = FALSE, resolution = 0.2)
+cluster_plot2 <- DimPlot(seurat_epi, label = TRUE, group.by = "SCT_snn_res.0.2", shuffle = TRUE, raster = TRUE)
+cluster_plot2
+```
+
+notable gene features to select resolution
+```
+Idents(seurat_epi) <- "SCT_snn_res.0.2"
+epithelial_genes <- c("KRT15", "KRT5","KRT14",
+                      "GSTP1",
+                      "KRT7", "KRT17",
+                      "LTF",
+                      "MSMB","ACPP",
+                      "NKX3-1","KLK2","KLK3",
+                      "SPINK1",
+                      "AMACR","PCA3",  "PCAT14",
+                      "ERG","PTEN","FOLH1")
+
+DoHeatmap(subset(seurat_epi, downsample = 100), features = epithelial_genes) +
+  scale_fill_viridis()
+```
+
+# inferCNV results
+Rulin Wang performed inferCNV analysis for each subject to define cells enriched for prostate cancer associated CNVs. 
+```
+# load epithelial seurat object
+seurat_epi <- readRDS("seurat_epi.rds")
+
+# load metadata with inferCNV subgroups for each subject
+setwd(paste(wrkdir, "/InferCNV results/", sep = ""))
+
+# List all files in the directory
+inferCNV_files <- list.files(pattern = "\\.rds$")
+
+# Load inferCNV metadata
+for (file in inferCNV_files) {
+  assign(
+    tools::file_path_sans_ext(file), 
+    readRDS(file), 
+    envir = .GlobalEnv
+  )
+}
+
+# subset to cells with prostate cancer associated CNVs 
+CNV_1 <- inferCNV_subject1 %>% filter(subgroup %in% c("s2", "s3","s6"))
+CNV_1$inferCNV_cancer <- "Subject 1"
+
+CNV_2 <- inferCNV_subject2 %>% filter(subgroup %in% c("s4", "s6", "s7", "s8", "s9"))
+CNV_2$inferCNV_cancer <- "Subject 2"
+
+CNV_4 <- inferCNV_subject4_5 %>% filter(orig.ident %in% c("CA4", "TZ4", "CZ4", "PZ4")) %>% filter(subgroup %in% c("s2", "s3","s6"))
+CNV_4$inferCNV_cancer <- "Subject 4"
+
+CNV_5 <- inferCNV_subject4_5 %>% filter(orig.ident %in% c("CA5", "TZ5", "CZ5", "PZ5")) %>% filter(subgroup %in% c("s1", "s3"))
+CNV_5$inferCNV_cancer <- "Subject 5"
+
+CNV_7 <- inferCNV_subject7 %>% filter(subgroup %in% c("s3", "s4","s6"))
+CNV_7$inferCNV_cancer <- "Subject 7"
+
+CNV_8 <- inferCNV_subject8 %>% filter(subgroup %in% c("s5","s6"))
+CNV_8$inferCNV_cancer <- "Subject 8"
+
+CNV_9 <- inferCNV_subject9 %>% filter(subgroup %in% c(" s1", " s2", " s5"))
+CNV_9$inferCNV_cancer <- "Subject 9"
+
+CNV_10 <- inferCNV_subject10 %>% filter(subgroup %in% c("s2"))
+CNV_10$inferCNV_cancer <- "Subject 10"
+
+# merge metadata
+inferCNV <- bind_rows(CNV_1, CNV_2, CNV_4, CNV_5, CNV_7, CNV_8, CNV_9)
+
+metadata_seurat <- seurat_epi@meta.data
+merged_metadata <- merge(inferCNV, metadata_seurat, by = "row.names") 
+merged_metadata <- merged_metadata %>% tibble::column_to_rownames("Row.names")
+
+seurat_epi$inferCNV <- merged_metadata["inferCNV_cancer"]
+```
+# InferCNV UMAP
+```{r}
+# load epithelial seurat object
+seurat_epi <- readRDS("seurat_epi.rds")
+
+Idents(seurat_epi) <- "inferCNV"
+levels(seurat_epi) <- c("Subject 1", "Subject 2", "Subject 4", "Subject 5", "Subject 7", "Subject 8", "Subject 9", "Subject 10")
+inferCNV_plot <- DimPlot(seurat_epi, shuffle = TRUE, raster = TRUE) + ggtitle("InferCNV Groups") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+inferCNV_plot
+```
+
+# cancer clusters
+Useful features used from this vignette
+https://satijalab.org/seurat/archive/v3.0/interaction_vignette.html
+```
+# epithelial clusters
+Idents(seurat_epi) <- "SCT_snn_res.0.2"
+new.cluster.ids <- c("Luminal",
+                     "Basal", "Luminal", "Cancer-1", "Atrophic/Intermediate", "Atrophic/Intermediate",
+                     "Cancer-2", "Luminal", "Luminal", "Atrophic/Intermediate", "Cancer-3",
+                     "Cancer-4", "Cancer-5", "Cancer-6", "Cancer-7", "Cancer-8")
+names(new.cluster.ids) <- levels(seurat_epi)
+seurat_epi[["epithelial_clusters"]] <- new.cluster.ids[as.numeric(as.matrix(seurat_epi@meta.data$SCT_snn_res.0.2))+1]
+seurat_epi <- RenameIdents(seurat_epi, new.cluster.ids)
+DimPlot(seurat_epi, reduction = "umap", label = TRUE, pt.size = 0.5, group.by = "epithelial_clusters", shuffle = TRUE) + 
+  NoLegend() + ggtitle("Epithelial Clusters")
+
+# epithelial groups
+Idents(seurat_epi) <- "SCT_snn_res.0.2"
+new.cluster.ids <- c("Luminal",
+                     "Basal", "Luminal", "Cancer", "Atrophic/Intermediate", "Atrophic/Intermediate",
+                     "Cancer", "Luminal", "Luminal", "Atrophic/Intermediate", "Cancer",
+                     "Cancer", "Cancer", "Cancer", "Cancer", "Cancer")
+names(new.cluster.ids) <- levels(seurat_epi)
+seurat_epi[["epithelial_groups"]] <- new.cluster.ids[as.numeric(as.matrix(seurat_epi@meta.data$SCT_snn_res.0.2))+1]
+seurat_epi <- RenameIdents(seurat_epi, new.cluster.ids)
+
+
+```
+Figure 2 panel A UMAPs of cancer clusters, groups, tissues and subjects
+```{r}
+# heatmap of marker genes
+epithelial_genes <- c("KRT15", "KRT5","KRT14",
+                      "GSTP1",
+                      "KRT7", "KRT17",
+                      "LTF",
+                      "MSMB","ACPP",
+                      "NKX3-1","KLK2","KLK3",
+                      "SPINK1",
+                      "AMACR","PCA3",  "PCAT14",
+                      "ERG","PTEN","FOLH1")
+
+Idents(seurat_epi) <- "epithelial_clusters"
+levels(seurat_epi) <- c("Basal",  "Atrophic/Intermediate", "Luminal", "Cancer-1", "Cancer-2","Cancer-3", "Cancer-4",
+                        "Cancer-5", "Cancer-6", "Cancer-7", "Cancer-8")
+DoHeatmap(subset(seurat_epi, downsample = 100), features = epithelial_genes) +
+  scale_fill_viridis()
+
+# UMAP of epi clusters
+DimPlot(seurat_epi, reduction = "umap", label = TRUE,
+                     shuffle = TRUE, raster = TRUE, repel = TRUE, label.size = 5) + 
+  NoLegend() + ggtitle("Epithelial Clusters") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# UMAP of epi groups
+DimPlot(seurat_epi, reduction = "umap", label = TRUE, 
+        group.by = "epithelial_groups", shuffle = TRUE, raster = TRUE) + 
+  NoLegend() + ggtitle("Epithelial Groups")
+
+# UMAP of Subject
+ DimPlot(seurat_epi, reduction = "umap", label = FALSE, group.by = "Subject", 
+         shuffle = TRUE, raster = TRUE) + ggtitle("Subject")
+
+# UMAP of tissue
+DimPlot(seurat_epi, group.by = "tissue_type", shuffle = TRUE, 
+        cols = c("#00afbb", "#e7b800"), raster = TRUE) + ggtitle("Tissue") 
+
+```
+
+# cancer Proportions
+```{r}
+library(ggsci)
+
+# proportions 
+prop.table(table(seurat_epi$patient_tissue, seurat_epi$epithelial_clusters), margin = 2)
+proportions_cluster <- as.data.frame(prop.table(table(seurat_epi$epithelial_clusters, seurat_epi$Subject, seurat_epi$tissue_type)))
+
+barplot_cluster <- proportions_cluster %>%
+     mutate(Var1 = factor(Var1, levels=rev(c("Basal", "Atrophic/Intermediate", "Luminal" ,
+                                       "Cancer-1", "Cancer-2","Cancer-3" ,"Cancer-4", "Cancer-5", "Cancer-6", "Cancer-7", "Cancer-8")))) %>%
+ggplot(aes(x = Var1, y = Freq, fill = Var3)) +
+  theme_classic(base_size = 15) +
+  geom_col(position = "fill") +
+  xlab("Epithelial Cluster") +
+  ylab("Proportion") +
+  theme(legend.title = element_blank())+
+  coord_flip() +
+  scale_fill_manual(values = c())+
+  scale_fill_jco()+ggtitle("Tissue")
+barplot_cluster
+
+barplot_cluster2 <- proportions_cluster %>%
+     mutate(Var1 = factor(Var1, levels=rev(c("Basal", "Atrophic/Intermediate", "Luminal" ,
+                                       "Cancer-1", "Cancer-2","Cancer-3" ,"Cancer-4", "Cancer-5", "Cancer-6", "Cancer-7", "Cancer-8")))) %>%
+ggplot(aes(x = Var1, y = Freq, fill = Var2)) +
+  theme_classic(base_size = 15) +
+  geom_col(position = "fill") +
+  xlab("Epithelial Cluster") +
+  ylab("Proportion") +
+  theme(legend.title = element_blank())+
+  coord_flip() +
+  scale_fill_manual(values = c())+
+  scale_fill_jco()+ggtitle("Subject")
+
+barplot_cluster2
+```
+
+# Differential gene expression analysis among cancer clusters
+```{r}
+library(wesanderson)
+pal <- wes_palette("Zissou1", 9, type = "continuous")
+
+#Idents(seurat_epi) <- "epithelial_clusters"
+#levels(seurat_epi) <- c("Basal",  "Atrophic/Intermediate", "Luminal", "Cancer-1", "Cancer-2","Cancer-3", "Cancer-4", "Cancer-5", "Cancer-6", "Cancer-7", "Cancer-8" )
+#levels(seurat_epi)
+
+#cluster_markers <- FindAllMarkers(seurat_epi)
+#saveRDS(cluster_markers, file = "epi_cluster_markers.rds")
+cluster_markers <- readRDS(file = "epi_cluster_markers.rds")
+
+# top marker genes for each cluster
+top_genes <- cluster_markers %>% group_by(cluster) %>% filter(pct.2 < 0.2) %>% top_n(5, -p_val_adj) %>% top_n(5, avg_log2FC) 
+Idents(seurat_epi) <- "epithelial_clusters"
+levels(seurat_epi) <- c("Basal",  "Atrophic/Intermediate", "Luminal", "Cancer-1", "Cancer-2","Cancer-3", "Cancer-4",
+                        "Cancer-5", "Cancer-6", "Cancer-7", "Cancer-8")
+DotPlot(seurat_epi, features = unique(top_genes$gene, cols.use = "BuRd")) + 
+          RotatedAxis() + coord_flip() + scale_y_discrete(position = "right") + 
+          theme(axis.text.x = element_text(angle = 45, hjust = 0))+ scale_color_gradientn(colours = pal)
+```
+
+# Heatmap of top differentially expressed genes for each cancer cluster
+heatmap using seurat DGE
+```{r}
+# make dataframe for heatmap
+Idents(seurat_epi) <- "epithelial_clusters"
+levels(seurat_epi)
+AvgExp <- AverageExpression(seurat_epi)
+AvgExp_SCT <- AvgExp$SCT
+
+# row standardization
+AvgExp_scale <- t(apply(AvgExp_SCT, 1, scale))
+colnames(AvgExp_scale) <- colnames(AvgExp_SCT)
+AvgExp_scale <- AvgExp_scale %>% na.omit() %>% as.data.frame()
+
+# Seurat DGE
+top_genes <- cluster_markers %>% group_by(cluster) %>% top_n(20, -p_val_adj) %>% top_n(20, avg_log2FC) 
+
+AvgExp_top <- filter(AvgExp_scale, rownames(AvgExp_scale) %in% c("GSTP1", "AMACR", "PTEN", top_genes$gene))
+AvgExp_top <- AvgExp_top %>% as.matrix()
+
+# complex heatmap
+library(tidyverse)
+library(RColorBrewer)
+library(ComplexHeatmap)
+
+# complex heatmap
+Heatmap(AvgExp_top, column_dend_reorder = TRUE, 
+        show_row_dend = FALSE,
+        row_names_side = "left",
+        row_names_gp = gpar(fontsize = 6),
+       column_names_rot = 45,
+       heatmap_legend_param = list(
+    title = "Z-score",
+    legend_height = unit(4, "cm")
+))
+
+# complex heatmap ERG SPINK1
+AvgExp_SPINK1 <- filter(AvgExp_scale, rownames(AvgExp_scale) %in% c("SPINK1", "ERG")) %>% as.matrix()
+AvgExp_t <- t(AvgExp_SPINK1) %>% as.data.frame()
+AvgExp_t <- AvgExp_t %>% arrange(SPINK1)
+
+cluster_order <- c("Cancer-3", "Cancer-8", "Cancer-7", "Cancer-6", "Cancer-1",
+                  "Basal","Atrophic/Intermediate", "Luminal",  
+                  "Cancer-4", "Cancer-5", "Cancer-2")
+
+Heatmap(AvgExp_SPINK1, column_dend_reorder = FALSE,
+        column_order = cluster_order,
+        row_order = c("SPINK1", "ERG"),
+        row_names_side = "left",
+        row_names_gp = gpar(fontsize = 11),
+        column_names_gp = gpar(fontsize = 11),
+       column_names_rot = 45,
+       heatmap_legend_param = list(
+    title = "Z-score"
+))
+
+```
+
+# PTEN, ERG cluster UMAPs
+```{r}
+library(DataCombine)
+c("Basal",  "Atrophic/Intermediate", "Luminal", "Cancer-1", "Cancer-2","Cancer-3", "Cancer-4",
+                        "Cancer-5", "Cancer-6", "Cancer-7", "Cancer-8")  
+metadata <- seurat_epi@meta.data
+
+#ERG neg/PTEN+
+metadata$groupA <- metadata$epithelial_clusters
+
+Replaces <- data.frame(from = c("Basal",  "Atrophic/Intermediate", "Luminal", "Cancer-1", "Cancer-2","Cancer-3", "Cancer-4",
+                        "Cancer-5", "Cancer-6", "Cancer-7", "Cancer-8"), 
+                       to = c(NA,  NA, NA, "Cancer-1", NA,"Cancer-3", NA,
+                        NA,  "Cancer-6", "Cancer-7", "Cancer-8"))
+metadata <- FindReplace(metadata, Var = "groupA", replaceData = Replaces, from = "from", to = "to", exact = TRUE)
+table(metadata$groupA)
+
+#ERG+/PTEN+
+metadata$groupB <- metadata$epithelial_clusters
+
+Replaces <- data.frame(from = c("Basal",  "Atrophic/Intermediate", "Luminal", "Cancer-1", "Cancer-2","Cancer-3", "Cancer-4",
+                        "Cancer-5", "Cancer-6", "Cancer-7", "Cancer-8"), 
+                       to = c(NA,  NA, NA, NA, "Cancer-2", NA, NA,
+                        "Cancer-5", NA, NA, NA))
+metadata <- FindReplace(metadata, Var = "groupB", replaceData = Replaces, from = "from", to = "to", exact = TRUE)
+table(metadata$groupB)  
+
+#ERG+/PTEN neg
+metadata$groupC <- metadata$epithelial_clusters
+
+Replaces <- data.frame(from = c("Basal",  "Atrophic/Intermediate", "Luminal", "Cancer-1", "Cancer-2","Cancer-3", "Cancer-4",
+                        "Cancer-5", "Cancer-6", "Cancer-7", "Cancer-8"), 
+                       to = c(NA,  NA, NA, NA, NA, NA, "Cancer-4",
+                        NA, NA, NA, NA))
+metadata <- FindReplace(metadata, Var = "groupC", replaceData = Replaces, from = "from", to = "to", exact = TRUE)
+table(metadata$groupC)  
+
+# UMAP Plots
+seurat_epi$groupA <- metadata$groupA       
+seurat_epi$groupB <- metadata$groupB
+seurat_epi$groupC <- metadata$groupC
+
+UMAP_groupA <- DimPlot(seurat_epi, label = FALSE, group.by = "groupA", shuffle = TRUE, raster = TRUE, cols = pal[5:9], pt.size = 2, repel = TRUE) + ggtitle("ERG Negative/PTEN Positive")
+UMAP_groupA
+
+UMAP_groupB <- DimPlot(seurat_epi, label = FALSE, group.by = "groupB", shuffle = TRUE, raster = TRUE, cols = pal[c(1,3)], pt.size = 2, repel = TRUE) + ggtitle("ERG Positive/PTEN Positive")
+UMAP_groupB
+
+UMAP_groupC <- DimPlot(seurat_epi, label = FALSE, group.by = "groupC", shuffle = TRUE, raster = TRUE, cols = pal[4], pt.size = 2, repel = TRUE) + ggtitle("ERG Positive/PTEN Negative")
+UMAP_groupC
+```
+
+# save seurat object
+```{r}
+# saveRDS(seurat_epi, file = "seurat_epi.rds")
+
+```
+
+

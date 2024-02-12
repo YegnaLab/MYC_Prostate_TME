@@ -1,0 +1,619 @@
+---
+title: "Mouse prostate stroma clusters"
+author: "Mindy Kim Graham"
+date: "6/14/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# single cell analysis of mouse prostate (WT and Hi-MYC) at 6 months and 10 months subsetted to the stroma population
+```{r}
+# Libraries
+library(Seurat)
+library(ggplot2)
+library(sctransform)
+library(glmGamPoi)
+library(dplyr)
+library(DataCombine)
+library(viridis)
+library(tidyverse)
+
+# set working directory
+wrkdir <- "C:/Users/mgraha21/OneDrive - Johns Hopkins/Mindy JHMI Onedrive/MYC prostate scRNAseq/Manuscript Version of Analysis/Github uploads" #update specific to user
+setwd(wrkdir)
+
+```
+
+subset to stroma cells
+```
+# load intergrated seurat object
+seurat.int <- readRDS(file = "FVB_DLP_int.rds")
+
+Idents(seurat.int) <- "cell_type"
+levels(seurat.int)
+
+mouse_seurat_stroma <- subset(seurat.int, idents = c("Smooth Muscle", "Endothelial", "Fibroblasts", "Pericytes", "Mesenchymal Plp1"))
+DimPlot(mouse_seurat_stroma)
+
+```
+
+integrate data by age
+https://satijalab.org/seurat/articles/sctransform_v2_vignette.html
+```
+# split the dataset into a list by strain (mo6 and mo10)
+mouse_seurat_stroma.list <- SplitObject(mouse_seurat_stroma, split.by = "age")
+
+mo6 <- mouse_seurat_stroma.list[["6mo"]]
+mo10 <- mouse_seurat_stroma.list[["10mo"]]
+
+```
+
+Perform integration using pearson residuals
+```
+# normalize and run dimensionality reduction on mo10 libraries
+mo10 <- SCTransform(mo10, vst.flavor = "v2", verbose = FALSE, return.only.var.genes = FALSE) %>%
+    RunPCA(npcs = 30, verbose = FALSE)
+mo6 <- SCTransform(mo6, vst.flavor = "v2", verbose = FALSE, return.only.var.genes = FALSE) %>%
+    RunPCA(npcs = 30, verbose = FALSE)
+
+mouse_seurat_stroma.list <- list(mo10 = mo10, mo6 = mo6)
+features <- SelectIntegrationFeatures(object.list = mouse_seurat_stroma.list, nfeatures = 3000)
+mouse_seurat_stroma.list <- PrepSCTIntegration(object.list = mouse_seurat_stroma.list, anchor.features = features)
+
+# integrate datasets
+age.anchors <- FindIntegrationAnchors(object.list = mouse_seurat_stroma.list, normalization.method = "SCT",
+    anchor.features = features)
+mouse_seurat_stroma <- IntegrateData(anchorset = age.anchors, normalization.method = "SCT")
+```
+
+Perform an integrated analysis
+```
+mouse_seurat_stroma <- RunPCA(mouse_seurat_stroma, verbose = FALSE)
+mouse_seurat_stroma <- RunUMAP(mouse_seurat_stroma, reduction = "pca", dims = 1:30, verbose = FALSE)
+mouse_seurat_stroma <- FindNeighbors(mouse_seurat_stroma, reduction = "pca", dims = 1:30)
+mouse_seurat_stroma <- FindClusters(mouse_seurat_stroma, resolution = 0.2)
+
+DimPlot(mouse_seurat_stroma, label = T, repel = T, shuffle = TRUE) + ggtitle("Unsupervised clustering")
+DimPlot(mouse_seurat_stroma, label = T, repel = T, shuffle = TRUE, group.by = "age")
+DimPlot(mouse_seurat_stroma, label = T, repel = T, shuffle = TRUE, group.by = "genotype")
+
+table(mouse_seurat_stroma$stroma, mouse_seurat_stroma$integrated_snn_res.0.2)
+```
+
+SCT transform without integration
+Perform SCTransform for all genes, keeping integrating clustering
+dimensionality reduction by PCA and UMAP embedding
+https://satijalab.org/seurat/articles/sctransform_v2_vignette.html
+```
+library(glmGamPoi)
+
+# run sctransform
+mouse_seurat_stroma <- SCTransform(mouse_seurat_stroma, method = "glmGamPoi", verbose = FALSE, return.only.var.genes = FALSE, vst.flavor = "v2")
+DimPlot(mouse_seurat_stroma, label = T, repel = T, shuffle = TRUE, group.by = "integrated_snn_res.0.2") + ggtitle("Unsupervised clustering")
+
+table(mouse_seurat_stroma$integrated_snn_res.0.2, mouse_seurat_stroma$genotype_age)
+```
+
+stroma cell type markers, filtered for mixed clusters
+```{r}
+# subtype markers
+sm_pericytes <- c("Tagln", "Acta2")
+Smooth_Muscle <- c("Acta1", "Actg2")
+Pericytes <- c("Rgs4", "Notch3")
+Fibroblast <- c("Pdgfra", "Fbln1")
+Fibroblast_subtypes <- c("Rorb", "Sult1e1", "Timp1")
+Endothelial <- c("Flt1","Eng","Cdh5")
+Glial <- c("Plp1", "Ngfr", "Mbp")
+Epithelial <- c("Krt8", "Krt18")
+```
+
+```
+gene_features <- c(Endothelial, Smooth_Muscle, sm_pericytes, Pericytes, Fibroblast, Fibroblast_subtypes, Glial)
+DoHeatmap(subset(mouse_seurat_stroma, downsample = 100), features = c(gene_features)) +
+  scale_fill_viridis()
+
+# cluster 3 is an epithelial cell contaiminated cluster and will be filtered/removed from downstream analysis
+table(mouse_seurat_stroma$cell_type, mouse_seurat_stroma$integrated_snn_res.0.2)
+
+age.combined.filtered <- subset(mouse_seurat_stroma, idents = 3, invert = TRUE)
+DimPlot(age.combined.filtered)
+```
+# integrate data by age using filtered seurat object
+https://satijalab.org/seurat/articles/sctransform_v2_vignette.html
+```
+# split the dataset into a list by strain (mo6 and mo10)
+mouse_seurat_stroma.list <- SplitObject(age.combined.filtered, split.by = "age")
+
+mo6 <- mouse_seurat_stroma.list[["6mo"]]
+mo10 <- mouse_seurat_stroma.list[["10mo"]]
+
+```
+Perform integration using pearson residuals
+```
+# normalize and run dimensionality reduction on mo10 libraries
+mo10 <- SCTransform(mo10, vst.flavor = "v2", verbose = FALSE, return.only.var.genes = FALSE) %>%
+    RunPCA(npcs = 30, verbose = FALSE)
+mo6 <- SCTransform(mo6, vst.flavor = "v2", verbose = FALSE, return.only.var.genes = FALSE) %>%
+    RunPCA(npcs = 30, verbose = FALSE)
+
+mouse_seurat_stroma.list <- list(mo10 = mo10, mo6 = mo6)
+features <- SelectIntegrationFeatures(object.list = mouse_seurat_stroma.list, nfeatures = 3000)
+mouse_seurat_stroma.list <- PrepSCTIntegration(object.list = mouse_seurat_stroma.list, anchor.features = features)
+
+# integrate datasets
+age.anchors <- FindIntegrationAnchors(object.list = mouse_seurat_stroma.list, normalization.method = "SCT",
+    anchor.features = features)
+mouse_seurat_stroma <- IntegrateData(anchorset = age.anchors, normalization.method = "SCT")
+```
+
+Perform an integrated analysis
+```
+mouse_seurat_stroma <- RunPCA(mouse_seurat_stroma, verbose = FALSE)
+mouse_seurat_stroma <- RunUMAP(mouse_seurat_stroma, reduction = "pca", dims = 1:30, verbose = FALSE)
+mouse_seurat_stroma <- FindNeighbors(mouse_seurat_stroma, reduction = "pca", dims = 1:30)
+mouse_seurat_stroma <- FindClusters(mouse_seurat_stroma, resolution = 0.1)
+
+DimPlot(mouse_seurat_stroma, label = T, repel = T, shuffle = TRUE) + ggtitle("Unsupervised clustering")
+DimPlot(mouse_seurat_stroma, label = F, repel = T, shuffle = TRUE, group.by = "age")
+DimPlot(mouse_seurat_stroma, label = F, repel = T, shuffle = TRUE, group.by = "genotype")
+
+table(mouse_seurat_stroma$stroma, mouse_seurat_stroma$integrated_snn_res.0.1)
+table(mouse_seurat_stroma$genotype_age, mouse_seurat_stroma$integrated_snn_res.0.1)
+```
+
+SCT transform without integration
+Perform SCTransform for all genes, keeping integrating clustering
+dimensionality reduction by PCA and UMAP embedding
+https://satijalab.org/seurat/articles/sctransform_v2_vignette.html
+```
+library(glmGamPoi)
+
+# run sctransform
+mouse_seurat_stroma <- SCTransform(mouse_seurat_stroma, method = "glmGamPoi", verbose = FALSE, return.only.var.genes = FALSE, vst.flavor = "v2")
+DimPlot(mouse_seurat_stroma, label = T, repel = T, shuffle = TRUE, group.by = "integrated_snn_res.0.1") + ggtitle("Unsupervised clustering")
+```
+
+Differential gene expression of clusters
+```
+# differentially expressed genes for each cluster
+levels(mouse_seurat_stroma)
+stroma_clusters <- FindAllMarkers(mouse_seurat_stroma)
+
+saveRDS(stroma_clusters, file = "mouse_seurat_stroma_DGE.rds")
+write.csv(stroma_clusters, file = "mouse_seurat_stroma_DGE.csv")
+
+# cluster genes
+stroma_clusters <- readRDS(file = "mouse_seurat_stroma_DGE.rds")
+top_stroma <- stroma_clusters %>% group_by(cluster) %>% filter(avg_log2FC > 0, pct.2 < 0.3) %>% top_n(5, -p_val_adj) %>% top_n(10, avg_log2FC)
+
+FibTimp1 <- top_stroma %>% filter(cluster %in% "Fibroblasts Timp1")
+subset(mouse_seurat_stroma, idents = c("Fibroblasts Subglandular", "Fibroblasts Interstitial", "Fibroblasts Timp1") ) %>% 
+  VlnPlot(features = c(FibTimp1$gene), group.by = "genotype_age", stack = TRUE, flip = TRUE) +
+  NoLegend() + ggtitle("Fibroblasts") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+DoHeatmap(subset(mouse_seurat_stroma, downsample = 100), features = c(top_stroma$gene)) +
+  scale_fill_viridis()
+
+```
+
+name clusters
+0 - Endothelial
+1 - Fibroblasts Timp1
+2 - Fibroblasts Subglandular
+3 - Fibroblasts Interstitial
+4 - Pericytes
+5 - Smooth Muscle
+6 - Glial
+
+```
+# stroma cells ID
+Idents(mouse_seurat_stroma) <- "integrated_snn_res.0.1"
+new.cluster.ids <- c("Endothelial",
+                     "Fibroblasts Timp1", "Fibroblasts Subglandular", "Fibroblasts Interstitial", "Pericytes", "Smooth Muscle",
+                     "Glial")
+
+names(new.cluster.ids) <- levels(mouse_seurat_stroma)
+mouse_seurat_stroma[["stroma"]] <- new.cluster.ids[as.numeric(as.matrix(mouse_seurat_stroma@meta.data$integrated_snn_res.0.1))+1]
+mouse_seurat_stroma <- RenameIdents(mouse_seurat_stroma, new.cluster.ids)
+```
+
+```{r}
+library(wesanderson)
+pal <- wes_palette("Zissou1", 6, type = "continuous")
+
+mouse_seurat_stroma <- readRDS(file = "seurat_stroma.rds")
+
+Idents(mouse_seurat_stroma) <- "stroma"
+levels(mouse_seurat_stroma) <- c("Endothelial", "Smooth Muscle", "Pericytes",
+                        "Fibroblasts Subglandular", "Fibroblasts Interstitial", "Fibroblasts Timp1",
+                        "Glial")
+
+DimPlot(mouse_seurat_stroma, label = TRUE, raster = TRUE, label.size = 5, pt.size = 2) + NoLegend() + ggtitle("Mouse Stromal Cell Clusters")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+DimPlot(mouse_seurat_stroma, label = FALSE, group.by = "age", raster = TRUE, 
+                 label.size = 5, cols = c("#f6bd60", "#84a59d"), pt.size =2) +
+  ggtitle("Age")+ theme(plot.title = element_text(hjust = 0.5))
+
+DimPlot(mouse_seurat_stroma, label = FALSE, raster = TRUE, label.size = 5, split.by = "genotype", pt.size = 2) + ggtitle("Stromal Cell Clusters Split by Genotype")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+mouse_seurat_stroma$genotype <- factor(mouse_seurat_stroma$genotype, levels = c("WT", "MYC"))
+
+DimPlot(mouse_seurat_stroma, label = FALSE, group.by = "genotype", raster = TRUE, label.size = 5, cols = c("#a8dadc", "#e63946"), pt.size = 2) +
+  ggtitle("Genotype")+ theme(plot.title = element_text(hjust = 0.5))
+
+FeaturePlot(mouse_seurat_stroma, features = "Timp1", raster = TRUE, order = TRUE, pt.size = 2) + scale_color_gradientn(colours = pal)
+
+# heatmap of stromal marker genes
+gene_features <- c(Endothelial, Smooth_Muscle, sm_pericytes, Pericytes, Fibroblast, Fibroblast_subtypes, Glial)
+DoHeatmap(subset(mouse_seurat_stroma, downsample = 50), features = c(gene_features)) +
+  scale_fill_viridis()
+```
+
+# Cell proportions by RAISIN
+Update stroma cell types in seurat.int
+```
+
+# stroma clusters
+Idents(seurat.int) <- "cell_type"
+DimPlot(seurat.int) 
+
+seurat.int$stroma <- seurat.int$cell_type
+seurat.int$stroma <- gsub("Smooth Muscle", "", seurat.int$stroma)
+seurat.int$stroma <- gsub("Endothelial", "", seurat.int$stroma)
+seurat.int$stroma <- gsub("Fibroblasts", "", seurat.int$stroma)
+seurat.int$stroma <- gsub("Pericytes", "", seurat.int$stroma)
+seurat.int$stroma <- gsub("Glial", "", seurat.int$stroma)
+table(seurat.int$stroma)
+
+seurat.int$stroma_subset <- mouse_seurat_stroma$stroma
+seurat.int$stroma <- paste0(seurat.int$stroma_subset, seurat.int$stroma)
+table(seurat.int$stroma)
+seurat.int$stroma <- gsub("NA", "", seurat.int$stroma)
+
+table(seurat.int$stroma)
+saveRDS(seurat.int, file = "FVB_DLP_int.rds")
+```
+
+RAISIN
+https://github.com/zji90/raisin//
+cell proportion by genotype
+```{r}
+library(raisin)
+
+# load complete seurat object
+seurat.int <- readRDS(file = "FVB_DLP_int.rds")
+
+# extract metadata from seurat object
+Idents(seurat.int) <- "stroma"
+levels(seurat.int)
+cluster <- Idents(seurat.int)
+
+Idents(seurat.int) <- "orig.ident"
+levels(seurat.int)
+individual <- Idents(seurat.int)
+
+# make the design 
+design <- data.frame(intercept=1,contrast=c(1,1,1,1,
+                                            1,1,
+                                            0,0,0,0,
+                                            0,0),
+                     row.names = c("HiMYC_D6_1", "HiMYC_D6_2", "HiMYC_L6_1", "HiMYC_L6_2", 
+                                   "HiMYC_B9_1", "HiMYC_B9_2",
+                                   "WT_D6_1", "WT_D6_2", "WT_L6_1", "WT_L6_2", 
+                                   "WT_B9_1", "WT_B9_2"))
+
+# run the test
+prop_test_results <- proportiontest(cluster,individual,design)
+prop_test_results <- prop_test_results %>% tibble::rownames_to_column("Cluster")
+prop_test_results
+```
+
+Plot cell proportion diferences of stroma cells
+```{r}
+DimPlot(seurat.int, group.by = "stroma")
+table(seurat.int$stroma)
+
+library(ggpubr)
+library_counts <- as.data.frame(table(seurat.int$orig.ident))
+
+# create dataframe containing all relevant metadata
+cell_type_enrich <- as.data.frame(table(seurat.int$orig.ident,seurat.int$genotype, seurat.int$age, seurat.int$stroma))
+
+cell_type_enrich$library <- library_counts$Freq
+cell_type_enrich$fraction <- cell_type_enrich$Freq / cell_type_enrich$library
+
+# rename columns to meaningful column names
+colnames(cell_type_enrich) <- c("Library", "Genotype", "Age", "Cluster", "Counts", "Library_Counts", "Fraction")
+
+# filter to library
+Idents(seurat.int) <- "orig.ident"
+levels(seurat.int)
+WT_D6_1 <- cell_type_enrich %>% filter(Library == "WT_D6_1", Genotype == "WT", Age == "6mo")
+WT_D6_2 <- cell_type_enrich %>% filter(Library == "WT_D6_2", Genotype == "WT", Age == "6mo")
+WT_L6_1 <- cell_type_enrich %>% filter(Library == "WT_L6_1", Genotype == "WT", Age == "6mo")
+WT_L6_2 <- cell_type_enrich %>% filter(Library == "WT_L6_2", Genotype == "WT", Age == "6mo")
+
+HiMYC_D6_1 <- cell_type_enrich %>% filter(Library == "HiMYC_D6_1", Genotype == "MYC", Age == "6mo")
+HiMYC_D6_2 <- cell_type_enrich %>% filter(Library == "HiMYC_D6_2", Genotype == "MYC", Age == "6mo")
+HiMYC_L6_1 <- cell_type_enrich %>% filter(Library == "HiMYC_L6_1", Genotype == "MYC", Age == "6mo")
+HiMYC_L6_2 <- cell_type_enrich %>% filter(Library == "HiMYC_L6_2", Genotype == "MYC", Age == "6mo")
+
+WT_B9_1 <- cell_type_enrich %>% filter(Library == "WT_B9_1", Genotype == "WT", Age == "10mo")
+WT_B9_2 <- cell_type_enrich %>% filter(Library == "WT_B9_2", Genotype == "WT", Age == "10mo")
+HiMYC_B9_1 <- cell_type_enrich %>% filter(Library == "HiMYC_B9_1", Genotype == "MYC", Age == "10mo")
+HiMYC_B9_2 <- cell_type_enrich %>% filter(Library == "HiMYC_B9_2", Genotype == "MYC", Age == "10mo")
+
+filtered_library_fraction <- rbind(WT_D6_1, WT_D6_2, WT_L6_1, WT_L6_2,
+                                   HiMYC_D6_1, HiMYC_D6_2, HiMYC_L6_1, HiMYC_L6_2,
+                                   WT_B9_1, WT_B9_2, HiMYC_B9_1, HiMYC_B9_2)
+
+# combine DF with cell proportion test results
+combined_df <- merge(filtered_library_fraction, prop_test_results, by.x = "Cluster", by.y = "Cluster")
+combined_df$`Genotype Age` <- paste(combined_df$Genotype, combined_df$Age, sep = " ")
+
+# Add pvalue to cluster name
+library(scales)
+combined_df$cluster_adjP <- paste(combined_df$Cluster,
+                                  "\n Hi-Myc vs WT",
+                                  "\n logFC = ", 
+                                  signif(combined_df$logFC, 2),
+                                  ", adj p-value = ", scientific(combined_df$adj.P.Val, 1))
+
+
+# update level names
+combined_df$`Genotype Age` <- gsub(" ", "\n", combined_df$`Genotype Age`)
+
+# order x axis
+combined_df$`Genotype Age` <- factor(combined_df$`Genotype Age`, levels = c("WT\n6mo", "WT\n10mo", "MYC\n6mo", "MYC\n10mo"))
+levels(combined_df$`Genotype Age`)
+
+# save df
+# saveRDS(combined_df, file = "stroma_combined_df.rds")
+
+# Plot selected stroma cells
+fib_prop <- combined_df %>% 
+  filter(Cluster %in% c("Endothelial", "Smooth Muscle", "Fibroblasts Subglandular", "Fibroblasts Interstitial", "Fibroblasts Timp1" )) %>%
+  ggplot(aes(x = `Genotype Age`, y = Fraction))+
+  geom_jitter(aes(fill = Genotype, color = `Genotype Age`), size = 3, 
+              width = 0.3) +
+  theme_classic() +
+  stat_summary(fun = mean, fun.min = mean, fun.max = mean,
+               geom = "crossbar", width = 0.5) +
+  ggtitle("Stromal Cell Proportions") +
+  theme(plot.title = element_text(hjust = 0.5))+
+  facet_wrap(~cluster_adjP, scales = "free", ncol = 3) +
+  scale_color_manual(values = c("#219ebc", "#023047", "#ffb703", "#fb8500")) +
+  NoLegend()
+
+fib_prop
+
+# VlnPlot
+Idents(seurat.int) <- "stroma"
+levels(seurat.int)
+seurat.int$genotype_age <- paste(seurat.int$genotype, seurat.int$age, sep = " ")
+seurat.int$genotype_age <- factor(seurat.int$genotype_age, levels = c("WT 6mo", "WT 10mo", "MYC 6mo", "MYC 10mo"))
+plot_fib <- 
+subset(seurat.int, idents = c("Fibroblasts Subglandular", "Fibroblasts Interstitial", "Fibroblasts Timp1") ) %>% 
+  VlnPlot(features = c("Timp1", "Col1a1", "Col1a2", "Col3a1", "Col5a2", "Pdgfra"), group.by = "genotype_age", stack = TRUE, flip = TRUE) +
+  scale_fill_manual(values = pal) + 
+  NoLegend() + ggtitle("Fibroblasts") +
+  theme(plot.title = element_text(hjust = 0.5))
+plot_fib
+
+```
+
+Save seurat object
+```
+saveRDS(mouse_seurat_stroma, file = "mouse_seurat_stroma.rds")
+```
+# CAF marker genes
+Examine the Timp1 Fibroblast cluster for previously published CAF molecular markers and subtypes
+https://aacrjournals.org/clincancerres/article/27/9/2636/672059/Molecular-Features-of-Cancer-associated-Fibroblast
+https://www.r-bloggers.com/2016/10/converting-mouse-to-human-gene-names-with-biomart-package/
+https://carmonalab.github.io/UCell_demo/UCell_Seurat_vignette.html
+```
+# functions to convert mouse and human genes
+mouse_human_genes = read.csv("http://www.informatics.jax.org/downloads/reports/HOM_MouseHumanSequence.rpt",sep="\t")
+
+convert_mouse_to_human <- function(gene_list){
+  
+  output = c()
+  
+  for(gene in gene_list){
+    class_key = (mouse_human_genes %>% filter(Symbol == gene & Common.Organism.Name=="mouse, laboratory"))[['DB.Class.Key']]
+    if(!identical(class_key, integer(0)) ){
+      human_genes = (mouse_human_genes %>% filter(DB.Class.Key == class_key & Common.Organism.Name=="human"))[,"Symbol"]
+      for(human_gene in human_genes){
+        output = append(output,human_gene)
+      }
+    }
+  }
+  
+  return (output)
+}
+
+convert_human_to_mouse <- function(gene_list){
+  
+  output = c()
+  
+  for(gene in gene_list){
+    class_key = (mouse_human_genes %>% filter(Symbol == gene & Common.Organism.Name=="human"))[['DB.Class.Key']]
+    if(!identical(class_key, integer(0)) ){
+      human_genes = (mouse_human_genes %>% filter(DB.Class.Key == class_key & Common.Organism.Name=="mouse, laboratory"))[,"Symbol"]
+      for(human_gene in human_genes){
+        output = append(output,human_gene)
+      }
+    }
+  }
+  
+  return (output)
+}
+
+# import panCAF marker genes and generate genesignature list
+library(readxl)
+panCAF <- read_excel("Galbo_CAF_markers.xlsx", 
+    sheet = "Table S3", skip = 1)
+
+pan_myCAF <- panCAF$`pan-myCAF` %>% na.omit()
+pan_dCAF <- panCAF$`pan-dCAF` %>% na.omit()
+pan_iCAF <- panCAF$`pan-iCAF` %>% na.omit()
+pan_iCAF2 <- panCAF$`pan-iCAF-2` %>% na.omit()
+pan_pCAF <- panCAF$`pan-pCAF` %>% na.omit()
+
+# convert human to mouse genes
+ms_pan_myCAF <- convertHumanGeneList(pan_myCAF)
+ms_pan_dCAF <- convertHumanGeneList(pan_dCAF)
+ms_pan_iCAF <- convertHumanGeneList(pan_iCAF)
+ms_pan_iCAF2 <- convertHumanGeneList(pan_iCAF2)
+ms_pan_pCAF <- convertHumanGeneList(pan_pCAF)
+
+# generate gene signature lists
+genelist <- list()
+genelist$pan_myCAF <- ms_pan_myCAF
+genelist$pan_dCAF <- ms_pan_dCAF
+genelist$pan_iCAF <- ms_pan_iCAF
+genelist$pan_iCAF2 <- ms_pan_iCAF2
+genelist$pan_pCAF <- ms_pan_pCAF
+
+saveRDS(genelist, file = "CAF_genelist.rds")
+```
+```{r}
+# gene signature analysis
+library(UCell)
+library(wesanderson)
+pal5 <- wes_palette("Zissou1", 5, "continuous")
+
+# load mouse converted CAF genelist
+genelist <- readRDS(file = "CAF_genelist.rds")
+
+mouse_seurat_stroma <- AddModuleScore_UCell(mouse_seurat_stroma, features = genelist)
+signature.names <- paste0(names(genelist), "_UCell")
+
+# vlnplot
+levels(mouse_seurat_stroma) <- levels(mouse_seurat_stroma)
+VlnPlot(mouse_seurat_stroma, features = signature.names, stack = TRUE, flip = TRUE, cols = pal5) + NoLegend()
+```
+
+# heatmap at single cell level of CAF scores Fibroblast clusters
+```{r}
+# complex heatmap
+library(tidyverse)
+library(RColorBrewer)
+library(ComplexHeatmap)
+
+fibroblast_seurat <- subset(mouse_seurat_stroma, idents = c("Fibroblasts Timp1", "Fibroblasts Subglandular", "Fibroblasts Interstitial"))
+DimPlot(fibroblast_seurat)
+
+FeaturePlot(fibroblast_seurat, features = signature.names, order = TRUE) & scale_color_gradientn(colors = pal5)
+
+gene_sig_df <- fibroblast_seurat@meta.data[c(18, 23:27)]
+
+gene_sig_matrix <- gene_sig_df[2:6] %>% as.matrix()
+
+# row standardization
+AvgExp_scale <- t(apply(gene_sig_matrix, 1, scale))
+colnames(AvgExp_scale) <- colnames(gene_sig_matrix)
+```
+annotations
+```{r}
+annotations <- gene_sig_df[1]
+head(annotations)
+
+# Annotations to be added to the top of the heatmap
+top.annotations = HeatmapAnnotation(`Fibroblast Cluster` = gene_sig_df$stroma,
+    col = list(`Fibroblast Cluster` = c("Fibroblasts Subglandular" = "#3B9AB2",
+                   "Fibroblasts Interstitial" = "#EBCC2A", 
+                   "Fibroblasts Timp1" = "#F21A00")),
+    which = "row")
+```
+
+heatmap of gene signature scores
+```{r}
+# complex heatmap
+Heatmap(gene_sig_matrix, 
+        left_annotation = top.annotations,
+        column_dend_reorder = TRUE, 
+        row_dend_reorder = TRUE, 
+        show_row_dend = TRUE,
+        show_column_dend = FALSE,
+        show_row_names = FALSE,
+        show_column_names = TRUE,
+        row_names_gp = gpar(fontsize = 12),
+       column_names_rot = 45,
+       heatmap_legend_param = list(
+    title = "Pan-CAF Gene Signature Score",
+    legend_height = unit(4, "cm")
+))
+```
+
+UMAPs
+```{r}
+FeaturePlot(mouse_seurat_stroma, features = c("pan_iCAF_UCell", "pan_dCAF_UCell", "pan_pCAF_UCell"), order = TRUE) & scale_color_gradientn(colors = pal5) & NoAxes()
+
+iCAF <- WhichCells(mouse_seurat_stroma, expression = pan_iCAF_UCell > 0.3)
+mouse_seurat_stroma$pan_iCAF <- ifelse(colnames(mouse_seurat_stroma) %in% iCAF, "Pan-iCAF", "Low")
+
+dCAF <- WhichCells(mouse_seurat_stroma, expression = pan_dCAF_UCell > 0.3)
+mouse_seurat_stroma$pan_dCAF <- ifelse(colnames(mouse_seurat_stroma) %in% dCAF, "Pan-dCAF", "Low")
+
+pCAF <- WhichCells(mouse_seurat_stroma, expression = pan_pCAF_UCell > 0.3)
+mouse_seurat_stroma$pan_pCAF <- ifelse(colnames(mouse_seurat_stroma) %in% pCAF, "Pan-pCAF", "Low")
+
+mouse_seurat_stroma$pan_caf <- paste(mouse_seurat_stroma$pan_iCAF, mouse_seurat_stroma$pan_dCAF, mouse_seurat_stroma$pan_pCAF, sep = " ")
+table(mouse_seurat_stroma$pan_caf)
+
+mouse_seurat_stroma$pan_caf <- gsub(" Low", "", mouse_seurat_stroma$pan_caf)
+mouse_seurat_stroma$pan_caf <- gsub("Low ", "", mouse_seurat_stroma$pan_caf)
+
+Idents(mouse_seurat_stroma) <- "stroma"
+fibroblast_seurat <- subset(mouse_seurat_stroma, idents = c("Fibroblasts Subglandular", "Fibroblasts Interstitial", "Fibroblasts Timp1"))
+
+
+
+Idents(fibroblast_seurat) <- "pan_caf"
+levels(fibroblast_seurat) <- c("Low", "Pan-iCAF", "Pan-dCAF", "Pan-pCAF", 
+                           "Pan-dCAF Pan-pCAF", "Pan-iCAF Pan-dCAF", "Pan-iCAF Pan-pCAF",
+                           "Pan-iCAF Pan-dCAF Pan-pCAF")
+
+UMAP_stroma <- DimPlot(fibroblast_seurat, group.by = "stroma", label = TRUE, repel = FALSE, label.size = 5, raster = TRUE, pt.size = 3) + NoLegend() + xlim (c(-15, 0)) + ylim(c(-4, 3)) 
+UMAP_stroma 
+
+pal8 <- wes_palette("Zissou1", 8, type = "continuous")
+UMAP_CAF <- DimPlot(fibroblast_seurat, order = TRUE, cols = c("lightgrey", pal8), pt.size = 3, raster = TRUE) + 
+  ggtitle("Pan-CAF Gene Signature Scores > 0.3") +
+  xlim (c(-15, 0)) + ylim(c(-4, 3)) +
+  NoAxes()+
+  theme(plot.title = element_text(hjust = 0.5))
+UMAP_CAF
+  
+table(fibroblast_seurat$pan_caf, fibroblast_seurat$stroma) 
+```
+
+# Correlation of macrophage and fibroblast fractions
+```{r}
+stroma_combined_df <- readRDS(file = "stroma_combined_df.rds")
+immune_combined_df <- readRDS(file = "immune_combined_df.rds")
+
+stroma_df <- stroma_combined_df[, c("Cluster", "Library", "Fraction")] %>% na.omit()
+immune_df <- immune_combined_df[, c("Cluster", "Library", "Fraction")] %>% na.omit()
+
+merged_df <- merge(stroma_df, immune_df, by = "Library")
+merged_df_filter <- merged_df %>% filter(Cluster.x == "Fibroblasts Timp1" & Cluster.y == "Macrophages Trem2")
+colnames(merged_df_filter)[3] <- "Fibroblast Timp1 Fraction"
+colnames(merged_df_filter)[5] <- "Macrophage Trem2 Fraction"
+
+ggplot(merged_df_filter, aes(x=`Fibroblast Timp1 Fraction`, y= `Macrophage Trem2 Fraction`)) + 
+  geom_smooth(method=lm, se=FALSE, color = "#219ebc") +
+  geom_point(size = 2) +
+  stat_cor(method = "pearson", label.x = 0.01, label.y = 0.010) +
+  theme_classic() +
+  ggtitle("Mouse Prostate")
+```
