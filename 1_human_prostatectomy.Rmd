@@ -1,0 +1,285 @@
+---
+title: "Human Prostatectomy Analysis"
+author: "Mindy Kim Graham"
+date: "01/26/2024"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Human Subjects Aggregated Prostatectomy Study
+Single-cell RNA-seq analysis of prostate tissue samples collected from 10 subjects who had radical prostatectomy. Biopsy punches from reach zone (peripheral, transition, central) as well as cancer-positive were collected and sequenced from each patient. This is an aggregate analysis of all the patient samples.
+
+This analysis is a merge of the peripheral zone benign and tumor enriched samples.
+The Seurat SCT workflow was used to perform the analysis:
+https://genomebiology.biomedcentral.com/articles/10.1186/s13059-019-1874-1
+
+Gene x cell count matrices and FASTQ files can be found on NCBI dbGaPs (accession phs003480.v1.p1I)
+ 
+```{r}
+# Libraries
+library(Seurat)
+library(dplyr)
+library(DataCombine)
+library(viridis)
+library(ggplot2)
+
+# set working directory
+wrkdir <- "C:/Users/mgraha21/OneDrive - Johns Hopkins/Mindy JHMI Onedrive/MYC prostate scRNAseq/Manuscript Version of Analysis/Github uploads" #update specific to user
+setwd(wrkdir)
+```
+# Load 10 X genomics data from multiple subjects, create seurat object
+Below shows code used to merge scRNA-seq counts matrices
+```
+# Load matrices
+CA1 <- Read10X(data.dir = paste(wrkdir, "/CA1_filtered_feature_bc_matrix/", sep = ""))
+CA2 <- Read10X(data.dir = paste(wrkdir, "/CA2_filtered_feature_bc_matrix/", sep = ""))
+CA3 <- Read10X(data.dir = paste(wrkdir, "/CA3_filtered_feature_bc_matrix/", sep = ""))
+CA4 <- Read10X(data.dir = paste(wrkdir, "/CA4_filtered_feature_bc_matrix/", sep = ""))
+CA5 <- Read10X(data.dir = paste(wrkdir, "/CA5_filtered_feature_bc_matrix/", sep = ""))
+CA6 <- Read10X(data.dir = paste(wrkdir, "/CA6_filtered_feature_bc_matrix/", sep = ""))
+CA7 <- Read10X(data.dir = paste(wrkdir, "/CA7_filtered_feature_bc_matrix/", sep = ""))
+CA8 <- Read10X(data.dir = paste(wrkdir, "/CA8_filtered_feature_bc_matrix/", sep = ""))
+CA9 <- Read10X(data.dir = paste(wrkdir, "/CA9_filtered_feature_bc_matrix/", sep = ""))
+CA10 <- Read10X(data.dir = paste(wrkdir, "/CA10_filtered_feature_bc_matrix/", sep = ""))
+PZ1 <- Read10X(data.dir = paste(wrkdir, "/PZ1_filtered_feature_bc_matrix/", sep = ""))
+PZ2 <- Read10X(data.dir = paste(wrkdir, "/PZ2_filtered_feature_bc_matrix/", sep = ""))
+PZ3a <- Read10X(data.dir = paste(wrkdir, "/PZ3a_filtered_feature_bc_matrix/", sep = ""))
+PZ3b <- Read10X(data.dir = paste(wrkdir, "/PZ3b_filtered_feature_bc_matrix/", sep = ""))
+PZ6 <- Read10X(data.dir = paste(wrkdir, "/PZ6_filtered_feature_bc_matrix/", sep = ""))
+PZ7 <- Read10X(data.dir = paste(wrkdir, "/PZ7_filtered_feature_bc_matrix/", sep = ""))
+PZ8 <- Read10X(data.dir = paste(wrkdir, "/PZ8_filtered_feature_bc_matrix/", sep = ""))
+PZ10 <- Read10X(data.dir = paste(wrkdir, "/PZ10_filtered_feature_bc_matrix/", sep = ""))
+
+# Initialize the Seurat object
+CA1 <- CreateSeuratObject(counts = CA1, project = "CA1", min.cells = 3, min.features = 200)
+CA2 <- CreateSeuratObject(counts = CA2, project = "CA2", min.cells = 3, min.features = 200)
+CA3 <- CreateSeuratObject(counts = CA3, project = "CA3", min.cells = 3, min.features = 200)
+CA4 <- CreateSeuratObject(counts = CA4, project = "CA4", min.cells = 3, min.features = 200)
+CA5 <- CreateSeuratObject(counts = CA5, project = "CA5", min.cells = 3, min.features = 200)
+CA6 <- CreateSeuratObject(counts = CA6, project = "CA6", min.cells = 3, min.features = 200)
+CA7 <- CreateSeuratObject(counts = CA7, project = "CA7", min.cells = 3, min.features = 200)
+CA8 <- CreateSeuratObject(counts = CA8, project = "CA8", min.cells = 3, min.features = 200)
+CA9 <- CreateSeuratObject(counts = CA9, project = "CA9", min.cells = 3, min.features = 200)
+CA10 <- CreateSeuratObject(counts = CA10, project = "CA10", min.cells = 3, min.features = 200)
+PZ1 <- CreateSeuratObject(counts = PZ1, project = "PZ1", min.cells = 3, min.features = 200)
+PZ2 <- CreateSeuratObject(counts = PZ2, project = "PZ2", min.cells = 3, min.features = 200)
+PZ3a <- CreateSeuratObject(counts = PZ3a, project = "PZ3a", min.cells = 3, min.features = 200)
+PZ3b <- CreateSeuratObject(counts = PZ3b, project = "PZ3b", min.cells = 3, min.features = 200)
+PZ6 <- CreateSeuratObject(counts = PZ6, project = "PZ6", min.cells = 3, min.features = 200)
+PZ7 <- CreateSeuratObject(counts = PZ7, project = "PZ7", min.cells = 3, min.features = 200)
+PZ8 <- CreateSeuratObject(counts = PZ8, project = "PZ8", min.cells = 3, min.features = 200)
+PZ10 <- CreateSeuratObject(counts = PZ10, project = "PZ10", min.cells = 3, min.features = 200)
+
+# merge dataset
+seurat_object <- merge(CA1, y = c(CA2, CA3, CA4, CA5, CA6, CA7, CA8, CA9, CA10,
+                                 PZ1, PZ2, PZ3a, PZ3b, PZ6, PZ7, PZ8, PZ10), 
+                      add.cell.ids = c("CA1", "CA2", "CA3", "CA4", "CA5", "CA6", "CA7", "CA8", "CA9", "CA10",
+                                       "PZ1", "PZ2", "PZ3a", "PZ3b", "PZ6", "PZ7", "PZ8", "PZ10"), 
+                      project = "Prostatectomy PCa PZ")
+```
+
+# Adding metadata
+```
+metadata <- seurat_object@meta.data
+
+# Tissue: tissue punches were collected from each prostate zone (PZ, TZ, CZ) and tumor (CA). All tumor samples came from the PZ.
+metadata$Tissue <- metadata$orig.ident
+
+Replaces <- data.frame(from = c("CA1", "CA2", "CA3", "CA4", "CA5", "CA6", "CA7", "CA8", "CA9", "CA10",
+                                       "PZ1", "PZ2", "PZ3a", "PZ3b", "PZ6", "PZ7", "PZ8", "PZ10"), 
+                       to = c("Cancer", "Cancer", "Cancer", "Cancer", "Cancer", 
+                              "Cancer", "Cancer", "Cancer", "Cancer", "Cancer",
+                              "Peripheral", "Peripheral", "Peripheral", "Peripheral", 
+                              "Peripheral", "Peripheral", "Peripheral", "Peripheral"))
+metadata <- FindReplace(metadata, Var = "Tissue", replaceData = Replaces, from = "from", to = "to", exact = TRUE)
+table(metadata$orig.ident, metadata$Tissue)
+
+# add additional metadata for subject
+metadata$Subject <- metadata$orig.ident
+
+Replaces <- data.frame(from = c("CA1", "CA2", "CA3", "CA4", "CA5", "CA6", "CA7", "CA8", "CA9", "CA10",
+                                       "PZ1", "PZ2", "PZ3a", "PZ3b", "PZ6", "PZ7", "PZ8", "PZ10"), 
+                       to = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 
+                              1, 2, 3, 3, 6, 7, 8, 10))
+metadata <- FindReplace(metadata, Var = "Subject", replaceData = Replaces, from = "from", to = "to", exact = TRUE)
+
+metadata$Subject <- as.numeric(metadata$Subject)
+table(metadata$orig.ident, metadata$Subject)
+
+# Gleason Grade
+metadata$Gleaon_Grade <- metadata$orig.ident
+Replaces <- data.frame(from = c("CA1", "CA2", "CA3", "CA4", "CA5", "CA6", "CA7", "CA8", "CA9", "CA10",
+                                       "PZ1", "PZ2", "PZ3a", "PZ3b", "PZ6", "PZ7", "PZ8", "PZ10"), 
+                       to = c(7, 7, 7, 7, 7, 9, 7, 9, 7, 7,
+                                       NA, NA, NA, NA, NA, NA, NA, NA))
+metadata <- FindReplace(metadata, Var = "Gleaon_Grade", replaceData = Replaces, from = "from", to = "to", exact = TRUE)
+
+metadata$Gleaon_Grade <- as.numeric(metadata$Gleaon_Grade)
+table(metadata$orig.ident, metadata$Gleaon_Grade)
+
+# Stage
+metadata$Stage <- metadata$orig.ident
+Replaces <- data.frame(from = c("CA1", "CA2", "CA3", "CA4", "CA5", "CA6", "CA7", "CA8", "CA9", "CA10",
+                                       "PZ1", "PZ2", "PZ3a", "PZ3b", "PZ6", "PZ7", "PZ8", "PZ10"), 
+                       to = c("T3AN0MX", "T2N0MX", "T2N0MX", "T2N0MX", "T3AN0MX", "T3AN0MX", "T2N0MX", "T3BN1MX", "T3AN0MX", "T2N0MX",
+                                       NA, NA, NA, NA, NA, NA, NA, NA))
+metadata <- FindReplace(metadata, Var = "Stage", replaceData = Replaces, from = "from", to = "to", exact = TRUE)
+table(metadata$orig.ident, metadata$Stage)
+
+# add metadata to merged seurat object
+seurat_object@meta.data <- metadata
+```
+
+# QC metrics
+Data clean up parameters
+```
+# Add number of genes per UMI for each cell to metadata
+seurat_object$log10GenesPerUMI <- log10(seurat_object$nFeature_RNA) / log10(seurat_object$nCount_RNA)
+
+# Compute percent mito ratio
+seurat_object$mitoRatio <- PercentageFeatureSet(object = seurat_object, pattern = "^MT-")
+seurat_object$mitoRatio <- seurat_object@meta.data$mitoRatio / 100
+```
+
+# Perform sctransform, dimensionality reduction by PCA and UMAP embedding
+The following workflow was adapted for this dataset:
+https://satijalab.org/seurat/articles/sctransform_v2_vignette.html
+```
+# run sctransform
+seurat_object <- SCTransform(seurat_object, verbose = TRUE, vst.flavor = "v2", return.only.var.genes = FALSE)
+
+# dimensional reduction
+seurat_object <- RunPCA(seurat_object, verbose = FALSE)
+ElbowPlot(seurat_object, ndims = 50) # majority of signal captured by 20 PCs
+seurat_object <- RunUMAP(seurat_object, reduction = "pca", dims = 1:40)
+seurat_object <- FindNeighbors(seurat_object, dims = 1:40, verbose = FALSE)
+
+# UMAP by subject
+DimPlot(seurat_object, label = FALSE, group.by = "Subject", shuffle = TRUE)
+
+# UMAP by biopsy area of prostate
+DimPlot(seurat_object, label = FALSE, group.by = "Tissue")
+
+# cluster resolution
+seurat_object <- FindClusters(seurat_object, verbose = FALSE, resolution = 1)
+DimPlot(seurat_object, label = TRUE, group.by = "SCT_snn_res.1", shuffle = TRUE)
+```
+
+# cell type ID
+Clusters were identified based on well-define marker genes
+```
+Idents(seurat_object) <- "SCT_snn_res.1"
+
+# generate cell type heatmap and dotplot
+Fibroblast <- c("FBLN1", "DCN", "PTGDS")
+Smooth_Muscle <- c("ACTG2", "ACTA2", "TAGLN", "MYL9")
+Pericytes <- c("RGS5", "NOTCH3")
+Endothelial <- c("CD93", "PECAM1")
+Immune <- c("PTPRC")
+Mast <- c("TPSAB1", "TPSB2", "KIT")
+Bcells <-c("JCHAIN", "CD79A")
+Tcells <- c("CD3G", "CD3D", "CD3E")
+Macrophages <- c("CD68", "C1QA", "C1QB", "C1QC")
+Luminal <- c("KRT8", "KRT18")
+Basal <- c("KRT5", "KRT14")
+
+celltype_genes <- c(Fibroblast, Smooth_Muscle, Pericytes, Endothelial,
+                    Tcells, Bcells, Macrophages, Mast, 
+                    Luminal, Basal)
+
+DoHeatmap(subset(seurat_object, downsample = 100), features = celltype_genes) +
+  scale_fill_viridis()
+
+# cell type ID
+new.cluster.ids <- c("Luminal",
+                     "Luminal", "Luminal", "Pericytes", "Basal", "Endothelial",
+                     "Endothelial", "Luminal", "T cells", "Luminal", "Luminal",
+                     "T cells", "Basal", "Luminal", "Macrophages", "Basal",
+                     "Luminal", "Luminal", "Luminal", "Luminal", "Luminal",
+                     "Basal", "Luminal", "Luminal", "Luminal", "Fibroblasts",
+                     "Luminal", "Luminal", "Luminal", "Endothelial", "Smooth Muscle",
+                     "Mast cells", "Luminal", "B cells")
+
+names(new.cluster.ids) <- levels(seurat_object)
+seurat_object[["cell_type"]] <- new.cluster.ids[as.numeric(as.matrix(seurat_object@meta.data$SCT_snn_res.1))+1]
+seurat_object <- RenameIdents(seurat_object, new.cluster.ids)
+DimPlot(seurat_object, reduction = "umap", label = TRUE, pt.size = 0.5, group.by = "cell_type", shuffle = TRUE)
+saveRDS(seurat_object, file = "seurat_prostatectomy.rds")
+```
+
+# Figure 1: Heatmap of cell type specific genes
+Code used to generate Figure 1C&D
+```{r}
+# marker gene list
+Fibroblast <- c("FBLN1", "DCN", "PTGDS")
+Smooth_Muscle <- c("ACTG2", "ACTA2", "TAGLN", "MYL9")
+Pericytes <- c("RGS5", "NOTCH3")
+Endothelial <- c("CD93", "PECAM1")
+Immune <- c("PTPRC")
+Mast <- c("TPSAB1", "TPSB2", "KIT")
+Bcells <-c("JCHAIN", "CD79A")
+Tcells <- c("CD3G", "CD3D", "CD3E")
+Macrophages <- c("CD68", "C1QA", "C1QB", "C1QC")
+Luminal <- c("KRT8", "KRT18")
+Basal <- c("KRT5", "KRT14")
+
+celltype_genes <- c(Fibroblast, Smooth_Muscle, Pericytes, Endothelial,
+                    Tcells, Bcells, Macrophages, Mast, 
+                    Luminal, Basal)
+
+# load seurat object
+seurat_object <- readRDS(file = "seurat_prostatectomy.rds")
+
+Idents(seurat_object) <- "cell_type"
+levels(seurat_object) <- c("Fibroblasts", "Smooth Muscle", "Pericytes", "Endothelial",
+                           "T cells", "B cells", "Macrophages", "Mast cells",
+                           "Luminal", "Basal")
+
+DoHeatmap(subset(seurat_object, downsample = 100), features = celltype_genes) +
+  scale_fill_viridis()
+
+# Figure 1: UMAPs by cell type, patient, tissue source
+
+DimPlot(seurat_object, label = TRUE, raster = TRUE, label.size = 5) + ggtitle("Cell Type") + NoLegend() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+DimPlot(seurat_object, label = FALSE, group.by = "Subject", shuffle = TRUE, raster = TRUE) + ggtitle("Subject") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+seurat_object$Tissue <- gsub("Peripheral", "Benign-enriched", seurat_object$Tissue)
+seurat_object$Tissue <- gsub("Cancer", "Cancer-enriched", seurat_object$Tissue)
+
+
+DimPlot(seurat_object, label = FALSE, group.by = "Tissue", shuffle = TRUE, raster = TRUE,  cols = c("#00afbb", "#e7b800")) + ggtitle("Tissue") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+# differential gene expression by cell type
+```
+Idents(seurat_object) <- "cell_type"
+markers_clusters <- FindAllMarkers(seurat_object, assay = "SCT")
+saveRDS(markers_clusters, file = "human_markers_celltype.rds")
+
+# adj pvalue <0.05, avg logFC2 > 1
+markers_filtered <- markers_clusters %>% filter(p_val_adj < 0.05 & avg_log2FC > 0.5)
+
+# top genes
+markers_top <- markers_filtered %>% group_by(cluster) %>% top_n(5, -p_val_adj) %>% top_n(5, -pct.2)
+```
+
+
+# cell counts summary
+```{r}
+seurat_object
+table(seurat_object$cell_type)
+```
+
+# Save seruat object
+```
+#save seurat object
+saveRDS(seurat_object, file = "seurat_prostatectomy.rds")
+```

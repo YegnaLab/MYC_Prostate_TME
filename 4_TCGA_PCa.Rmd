@@ -1,0 +1,325 @@
+---
+title: "TCGA: Gene Set Enrichment"
+author: "Bulouere Wodu and Mindy Graham"
+date: '2022-07-21'
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+Analysis original prepared by Bulouere. 
+Reviewed and adapted by MKGraham for manuscript
+```{r}
+#Libraries
+library(TCGAbiolinks)
+library(dplyr)
+library(DT)
+library(readr)
+library(SummarizedExperiment)
+library(msigdbr)
+library(fgsea)
+library(ComplexHeatmap)
+library(circlize)
+library(viridis)
+library(writexl)
+library(ggplot2)
+library(tidyr)
+library(ggpubr)
+
+# set working directory
+wrkdir <- "C:/Users/mgraha21/OneDrive - Johns Hopkins/Mindy JHMI Onedrive/MYC prostate scRNAseq/Manuscript Version of Analysis/Github uploads" #update specific to user
+setwd(wrkdir)
+```
+
+## Data
+Read in clinical data in order to extract the patient IDs. The clinical data was downloaded from cbioportal (https://www.cbioportal.org/study/clinicalData?id=prad_tcga_pub)
+```
+
+cl.data <- read_tsv("prad_tcga_pub_clinical_data.tsv")
+patient.id <- cl.data$`Patient ID`
+```
+ 
+Download normalized RNA-seq data and it's associated metadata
+```
+# Set the parameters to search for in TCGA
+gdc.query <- GDCquery(project = "TCGA-PRAD", 
+                      data.category = "Gene expression",
+                      data.type = "Gene expression quantification", 
+                      platform = "Illumina HiSeq", 
+                      file.type  = "normalized_results",
+                      experimental.strategy = "RNA-Seq",
+                      barcode =  patient.id,
+                      legacy = TRUE)
+
+# Download GDC data with the specified query
+GDCdownload(gdc.query)
+```
+GDC data download
+```{r}
+# Read in the GDC data downloaded as a SummarizedExperiment object. Save the SummarizedExperiment object as an R object
+exp.data <- load(file = "tcga-dataset.rda")
+exp.data <- data
+
+# Get the gene expression data. Converted to a dataframe for downstream analysis particularly because of the duplicate genes.
+rna.data <- as.data.frame(assay(exp.data))
+# Check if there are any missing values in the data
+is.na(rna.data)[is.na(rna.data) == TRUE]
+# Remove duplicate rows
+
+# Data frame with sample information
+sample.info <- colData(exp.data)
+```
+
+## Z-score Calculation
+Create a data frame with the mean and standard deviation of expression within the normal samples
+```{r}
+# Barcodes of the tumor samples
+tp.barcode <- sample.info[sample.info$definition == "Primary solid Tumor", "barcode"]
+
+# Barcodes of the normal samples
+np.barcode <- sample.info[sample.info$definition == "Solid Tissue Normal", "barcode"]
+
+# Create dataframe to contain the genes and their average expression in normal samples
+avg.exp <- data.frame(Genes = row.names(rna.data), 
+                      Mean_normal = rep(NA, times = length(row.names(rna.data))),
+                      SD_normal = rep(NA, times = length(row.names(rna.data))))
+
+# Add the mean and standard deviation of expression for each gene within the normal samples
+for(i in 1:nrow(avg.exp)) {
+  # Get the gene symbol
+  gene <- avg.exp[i,1]
+  
+  # calculate average expression of gene in normal samples
+  ave <- mean(as.numeric(rna.data[gene, np.barcode]))
+  
+  # calculate standard deviation expression of gene in normal samples
+  sd <- sd(rna.data[gene, np.barcode])
+  
+  # Add the calculated average to the data frame
+  avg.exp[avg.exp$Genes == gene, "Mean_normal"] <- ave
+  
+  # Add the calculated standard deviation to the dataframe
+  avg.exp[avg.exp$Genes == gene, "SD_normal"] <- sd
+}
+```
+
+Calculate the z-score for each gene within each sample
+```
+# Create an empty data frame which will eventually contain the z-scores for each gene within each sample
+zscore.df <- as.data.frame(matrix(ncol = ncol(rna.data), nrow = nrow(rna.data)))
+rownames(zscore.df) <- rownames(rna.data)
+colnames(zscore.df) <- colnames(rna.data)
+
+# Add the zscores for each gene within each sample to the dataframe
+# Loop through each row
+for(i in 1:nrow(zscore.df)) {
+  gene <- row.names(zscore.df)[i]
+  if (avg.exp[avg.exp$Genes == gene, "SD_normal"] == 0 | 
+      avg.exp[avg.exp$Genes == gene, "Mean_normal"] == 0) {
+    zscore.df[gene,] <- 0
+  } else {
+    # Loop through each column
+    for(j in 1:ncol(zscore.df)) {
+      sample <- colnames(zscore.df)[j]
+      zscore <- (rna.data[gene,sample] - 
+                   avg.exp[avg.exp$Genes == gene, "Mean_normal"])/
+        avg.exp[avg.exp$Genes == gene, "SD_normal"]
+      zscore.df[gene,sample] <- zscore
+    }
+  }
+}
+
+# saveRDS(zscore.df, "RNA-seq_zscores.rds")
+
+```
+
+## Gene Set Enrichment Analysis
+Create a data frame with the normalized enrichment scores (NES)
+``` {r}
+
+# Get gene sets
+pathways.all <- msigdbr(species = "Homo sapiens")
+# Subset the gene sets of interest
+pathways <- pathways.all[pathways.all$gs_name %in% c("HALLMARK_MYC_TARGETS_V1", 
+                                                     "HALLMARK_MYC_TARGETS_V2",
+                                                     "DANG_MYC_TARGETS_UP",
+                                                     "ELLWOOD_MYC_TARGETS_UP"),
+                         ] %>%
+
+# Convert from data frame to a list. Each item in the list is a gene set with a vector of its genes
+  split(x = .$gene_symbol, f = .$gs_name)
+```
+
+Create an empty data frame which contain the normalized enrichment scores for each pathway and sample
+```
+nes.df <- as.data.frame(matrix(ncol = length(pathways), nrow = ncol(zscore.df)))
+rownames(nes.df) <- colnames(zscore.df)
+colnames(nes.df) <- names(pathways)
+
+# Perform gene set enrichment analysis for each sample
+for(i in 1:nrow(nes.df)) {
+  # Get the sample name
+  sample <- rownames(nes.df)[i]
+  
+  # Rank genes based on their z-scores
+  ranks <- zscore.df[, sample]
+  # Add the gene symbols as names to the vector containing the z-score
+  names(ranks) <- rownames(zscore.df)
+  
+  # Gene set enrichment analysis
+  gsea <- fgsea(pathways, ranks, nperm = 1000)
+  
+  # Add normalized enrichment scores (NES) to data frame
+  for(j in 1:ncol(nes.df)) {
+    gene.set <- colnames(nes.df)[j]
+    nes.df[sample,gene.set] <- gsea[gsea$pathway == gene.set, "NES"]
+  }
+}
+```
+
+Add sample information to the data frame with the normalized enrichment scores
+```
+# Add new columns to contain the following sample information:
+# Patient id
+nes.df$`Patient ID` <- sample.info$patient
+# Tumor or normal
+nes.df$`Type` <- NA
+# Molecular subtype of cancer
+nes.df$`Subtype` <- NA
+# Androgen receptor score
+nes.df$`AR Score` <- NA
+# Gleason score of tumor
+nes.df$ `Clinical Gleason Sum` <- NA
+# Sample ID
+nes.df$Sample <- rownames(nes.df)
+
+# Add the sample information to the data frame
+for (i in 1:nrow(nes.df)) {
+  # The data frame with the clinical data only has tumor samples so manually assign a value for the normal samples
+  if(rownames(nes.df)[i] %in% np.barcode){
+    nes.df[i, c("Subtype", "Type")] <- "Normal"
+  } else {
+    # Assign the type for the tumor samples
+    nes.df[i, "Type"] <- "Tumor"
+    # Get patient id
+    patient.id <- nes.df[i, "Patient ID"]
+    # Use patient id to extract the following information from the data frame containing the clinical data:
+    # molecular subtype from the clinical data
+    nes.df[i, "Subtype"] <- cl.data[cl.data$`Patient ID` == patient.id, 
+                                     "Subtype"]
+    # AR score
+    nes.df[i, "AR Score"] <- cl.data[cl.data$`Patient ID` == patient.id, 
+                                     "AR Score"]
+    nes.df[i, "Clinical Gleason Sum"] <- cl.data[cl.data$`Patient ID` == patient.id, 
+                                     "Clinical Gleason Sum"]
+  }
+}
+
+nes.df$Subtype <- factor(nes.df$Subtype, levels = c("Normal", "1-ERG", "2-ETV1", "3-ETV4", "4-FLI1", "5-SPOP", "6-FOXA1", "7-IDH1", "8-other"))
+
+# Sort data frame
+nes.df <- nes.df %>%
+  group_by(Subtype) %>% 
+  arrange(desc(DANG_MYC_TARGETS_UP), .by_group = TRUE)
+
+# Save dataframe
+# saveRDS(nes.df, "nes.rds")
+
+
+```
+
+```{r}
+# load NES dataframe
+nes.df <- readRDS(file = "nes.rds")
+
+# Sample TCGA-HC-7079-01A-11R-1965-07 has NA as the NES for the HALLMARK_MYC_TARGETS_V1 gene set so remove it from the dataframe
+nes.df <- nes.df[!is.na(nes.df$HALLMARK_MYC_TARGETS_V1),]
+
+# replace NES with NA for normal tissue samples
+nes.df.NA <- nes.df %>% mutate(across(DANG_MYC_TARGETS_UP:HALLMARK_MYC_TARGETS_V2, ~replace(., Sample %in% np.barcode, NA)))
+```
+
+## Heatmap
+Annotations to include in heatmap
+```{r}
+# Annotations to include in the heatmap
+hallmarkv1 <- nes.df.NA$HALLMARK_MYC_TARGETS_V1
+hallmarkv2 <- nes.df.NA$HALLMARK_MYC_TARGETS_V2
+dang <- nes.df.NA$DANG_MYC_TARGETS_UP
+subtype <- nes.df.NA$Subtype
+# Clinical Gleason Score
+gleason <- nes.df.NA$`Clinical Gleason Sum`
+ar.score <- nes.df.NA$`AR Score`
+
+# Create color palette for normalized enrichment score
+nes.color <- colorRamp2(c(-2,0, 2), c("blue", "white", "red"))
+
+# Create color palette for gleason scores
+gleason.color <- colorRamp2(c(6, 10), c("white", "purple4"))
+
+# Create color palette for AR score
+ar.color <- colorRamp2(c(min(ar.score, na.rm = TRUE), 
+                         max(ar.score, na.rm = TRUE)), c("white", "brown4"))
+
+# Annotations to be added to the top of the heatmap
+top.annotations = HeatmapAnnotation(
+  `AR Score` = ar.score, `Clinical Gleason Score` = gleason,
+  Subtype = subtype, DANG_MYC_TARGETS_UP = dang, 
+  HALLMARK_MYC_TARGETS_V2 = hallmarkv2, HALLMARK_MYC_TARGETS_V1 = hallmarkv1,
+  na_col = "grey",
+  col = list(Subtype =c("1-ERG" = "darkolivegreen4", "2-ETV1" = "steelblue4",
+                        "3-ETV4" = "lightskyblue2", "4-FLI1" = "lightgreen",
+                        "5-SPOP" = "purple2", "6-FOXA1" = "deeppink2",
+                        "7-IDH1" = "palevioletred2","8-other" = "orange",
+                        "Normal" = "grey"),
+             DANG_MYC_TARGETS_UP = nes.color,
+             HALLMARK_MYC_TARGETS_V2 = nes.color,
+             HALLMARK_MYC_TARGETS_V1 = nes.color, 
+             `Clinical Gleason Score` = gleason.color, `AR Score` = ar.color),
+  
+  gap = unit(0.5, "mm"), annotation_name_gp = gpar(fontsize = 10),
+  
+  annotation_legend_param = list(Subtype = list(title = "Subtype"),
+    DANG_MYC_TARGETS_UP = list(title = "NES")),
+    show_legend = c(TRUE, TRUE, TRUE, TRUE, FALSE, FALSE))
+```
+
+Heatmap with only genes in the HALLMARK_MYC_TARGETS_V1 gene set
+```{r}
+genes.plot <- unique(c(pathways$DANG_MYC_TARGETS_UP, 
+                      pathways$HALLMARK_MYC_TARGETS_V1,
+                      pathways$HALLMARK_MYC_TARGETS_V1))
+genes.plot <- genes.plot[genes.plot %in% rownames(assay(exp.data))]
+
+genes.myc1 <- pathways$HALLMARK_MYC_TARGETS_V1[pathways$HALLMARK_MYC_TARGETS_V1 
+                                               %in% rownames(assay(exp.data))]
+
+# Convert the data frame with the zscores to a matrix in order to plot it as a heatmap
+zscore.df <- readRDS(file = "RNA-seq_zscores.rds")
+zscore.matrix <- as.matrix(zscore.df[genes.plot, nes.df.NA$Sample])
+
+# remove NAs
+zscore.matrix <- na.omit(zscore.matrix)
+
+# Create color palette for the expression data
+exp.color = colorRamp2(quantile(c(-3, 3), 
+                                prob=c(0, 0.25, 0.5, 0.75, 1)), 
+                       viridis_pal(option = "D")(5))
+
+# Heatmap
+zcore_heatmap <- Heatmap(zscore.matrix, name = "Expression (Z-score)",  
+        column_order = nes.df.NA$Sample,
+        col = exp.color, show_row_names = FALSE, show_column_names = FALSE,
+        show_row_dend = FALSE, top_annotation = top.annotations,
+        heatmap_legend_param = list(labels_gp = gpar(fontsize = 10), 
+                                    title_gp = gpar(fontsize = 10, 
+                                                    fontface = "bold")),
+        width = ncol(zscore.matrix)*unit(0.35, "mm"))
+
+draw(zcore_heatmap, padding = unit(c(0, 25, 0, 0), "mm")) 
+```
+

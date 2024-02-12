@@ -1,0 +1,341 @@
+---
+title: "Domino HiMyc Stroma"
+author: "Mindy Graham"
+date: "2023-01-20"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Stromal Subset of Hi-Myc mouse 6 month and 10 month data 
+```{r}
+# Libraries
+library(Seurat)
+library(dplyr)
+library(readr)
+library(DataCombine)
+library(viridis)
+library(ggplot2)
+library(glmGamPoi)
+
+# set working directory
+wrkdir <- "C:/Users/mgraha21/OneDrive - Johns Hopkins/Mindy JHMI Onedrive/MYC prostate scRNAseq/Manuscript Version of Analysis/Github uploads" #update specific to user
+setwd(wrkdir)
+```
+Load data
+```
+# load seurat object
+seurat_object <- readRDS(file = "FVB_DLP_int.rds")
+
+DimPlot(seurat_object, group.by = "stroma")
+table(seurat_object$stroma, seurat_object$genotype)
+
+# subset to epithelial and stromal cell types
+Idents(seurat_object) <- "stroma"
+levels(seurat_object)
+seurat_stroma <- subset(seurat_object, idents = c("Luminal", "Basal", "Luminal MYC1" , "Reactive Luminal",
+                                               "Macrophages", 
+                                               "Fibroblasts Interstitial", "Fibroblasts Subglandular", "Fibroblasts Timp1")) 
+
+
+
+# subset to ~1500 cells
+Idents(seurat_stroma) <- "stroma"
+seurat_object_ds <- subset(seurat_stroma, downsample = 175)
+table(seurat_object_ds$stroma)
+
+saveRDS(seurat_object_ds, file = "seurat_objectstroma_ds.rds")
+
+# get counts data, faster tsv output
+data.table::fwrite(t(as.matrix(seurat_object_ds@assays$RNA@counts)), 
+                   "C:/Users/mgraha21/OneDrive - Johns Hopkins/Mindy JHMI Onedrive/MYC prostate scRNAseq/Manuscript Version of Analysis/Figure 6 Mouse Stroma/HiMYCFVBDLP Domino Stroma/counts.tsv", 
+                   nThread = 8,
+                   sep = '\t', 
+                   col.names = TRUE)
+```
+# initiate docker script
+open directory wsl.localhost\Ubuntu-20.04\home\mindykimgraham\docker_scratch
+copy counts generated file to docker scratch directory
+run the bash script to initiate SCENIC: open Linux (Ubuntu-20.04) command line prompt
+ls (shows list of files in directory, confirm that docker scracth folder is there)
+cd (followed by folder name opens directory, typing cd brings back home directory)
+bash ~/docker_scratch/mgi_scenic.sh
+If working, should see in docker running aertslab/pyscenic:0.10.0
+FYI: this can take a few hours to run. Any dataset with greater than 1500 cells reach computational limits.
+move outputs to current directory to create a Domino object from outputs : auc_mtx.csv, regulons.csv
+
+# edit create_domino function
+```
+# devtools::install_github('Chris-Cherry/domino')
+
+library(domino)
+trace(domino:::convert_genes, edit = TRUE)
+https://github.com/Chris-Cherry/domino/issues/14
+
+function (genes, from, to) 
+{
+  if (from == "ENSMUSG") {
+    srcMart = biomaRt::useMart("ensembl", dataset = "mmusculus_gene_ensembl")
+    sourceAtts = "ensembl_gene_id"
+  }
+  if (from == "ENSG") {
+    srcMart = biomaRt::useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+    sourceAtts = "ensembl_gene_id"
+  }
+  if (from == "MGI") {
+    srcMart = biomaRt::useMart("ensembl", dataset = "mmusculus_gene_ensembl", 
+      host = "https://dec2021.archive.ensembl.org/")
+    sourceAtts = "mgi_symbol"
+  }
+  if (from == "HGNC") {
+    srcMart = biomaRt::useMart("ensembl", dataset = "hsapiens_gene_ensembl", 
+      host = "https://dec2021.archive.ensembl.org/")
+    sourceAtts = "hgnc_symbol"
+  }
+  if (to == "MGI") {
+    tarMart = biomaRt::useMart("ensembl", dataset = "mmusculus_gene_ensembl", 
+      host = "https://dec2021.archive.ensembl.org/")
+    tarAtts = "mgi_symbol"
+  }
+  if (to == "HGNC") {
+    tarMart = biomaRt::useMart("ensembl", dataset = "hsapiens_gene_ensembl", 
+      host = "https://dec2021.archive.ensembl.org/")
+    tarAtts = "hgnc_symbol"
+  }
+  genesV2 = biomaRt::getLDS(attributes = sourceAtts, filters = sourceAtts, 
+    values = genes, mart = srcMart, attributesL = tarAtts, 
+    martL = tarMart, uniqueRows = F)
+  return(genesV2)
+}
+```
+
+
+# create domino object
+```
+# load downsampled seurat object
+seurat_object_ds <- readRDS(file = "seurat_objectstroma_ds.rds")
+Idents(seurat_object_ds) <- "stroma"
+DimPlot(seurat_object_ds)
+
+# load library
+library(domino)
+library(tidyverse)
+library(stringr) 
+library(wesanderson)
+
+counts = seurat_object_ds@assays$SCT@counts
+z_scores = seurat_object_ds@assays$SCT@scale.data
+clusters = seurat_object_ds@active.ident
+
+data <- read.csv(file = "stroma_auc_mtx.csv", header = TRUE, 
+    stringsAsFactors = FALSE, sep = ',')
+rownames(data) <- colnames(seurat_object_ds@assays[["SCT"]]@data)
+data <- data[,-1]
+auc <- t(data)
+
+df_regulons <- read.csv(file = "stroma_regulons.csv")
+
+# create domino object
+dom_object = create_domino(signaling_db = "signaling_db/", 
+    features = auc, counts = counts, z_scores = z_scores, clusters = clusters, 
+    df = df_regulons, gene_conv = c("HGNC", "MGI"))
+
+saveRDS(dom_object, file = "stroma_dom_object.rds")
+```
+
+# cell network analysis
+```{r}
+# load library
+library(domino)
+library(tidyverse)
+library(stringr) 
+library(wesanderson)
+
+dom_object <- readRDS(file = "stroma_dom_object.rds")
+
+# building networks
+dom_object = build_domino(dom_object, max_tf_per_clust = 10, 
+    min_tf_pval = .0001, max_rec_per_tf = 10, rec_tf_cor_threshold = 0.25)
+
+# visualize networks
+pal <- wes_palette("Zissou1")
+
+signaling_network(dom_object, edge_weight = 1, max_thresh = 2.5,
+                  cols = c(`Luminal MYC 1` = pal[5],
+                           `Basal` = "light grey",
+                           Luminal = "light grey", `Reactive Luminal` =  "light grey",
+                           Macrophages = pal[4], `Fibroblasts Timp1` = "light grey",
+                           `Fibroblasts Interstitial` = "light grey", `Fibroblasts Subglandular` = "light grey"))
+signaling_df <- dom_object@signaling %>% as.data.frame() %>% arrange(desc(`L_Luminal MYC 1`))
+
+# heatmap of transcription factor scores
+# feat_heatmap(dom_object, norm = TRUE, bool = FALSE)
+
+# heatmap of correlations
+# cor_heatmap(dom_object, bool = FALSE, mark_connections = TRUE)
+```
+
+# examine what ligands driving paracrine related changes in TME
+A special emphasis on examining the Timp1 expressing fibroblast population
+```{r}
+# Targeting Fibroblasts Timp1
+signaling_FibTimp1_top <- dom_object@cl_signaling_matrices[["Fibroblasts Timp1"]] %>% 
+  as.data.frame() %>% rownames_to_column("Ligand") %>% 
+  filter(L_Basal > 1.5|L_Luminal > 1.5|`L_Luminal MYC 1` > 1.5|`L_Reactive Luminal`> 1.5|L_Macrophages>1.5|
+           `L_Fibroblasts Subglandular`>1.5|`L_Fibroblasts Interstitial` > 1.5|`L_Fibroblasts Timp1`>1.5)
+```
+
+Heatmap of tops ligands targeting cluster Fibroblast Timp1
+```{r}
+# complex heatmap
+library(tidyverse)
+library(dplyr)
+library(RColorBrewer)
+library(ComplexHeatmap)
+
+# load seurat object
+seurat_object <- readRDS(file = "FVB_DLP_int.rds")
+
+# expression matrix
+Idents(seurat_object) <- "stroma"
+levels(seurat_object)
+AvgExp <- AverageExpression(seurat_object)
+AvgExp_SCT <- AvgExp$SCT %>% as.data.frame()
+
+# select relevant columns
+AvgExp_SCT <- AvgExp_SCT %>% dplyr::select(Luminal, Basal, `Luminal MYC 1` , `Reactive Luminal`,
+                                    Macrophages, `Fibroblasts Interstitial`, `Fibroblasts Subglandular`, `Fibroblasts Timp1`)
+
+# row standardization
+AvgExp_scale <- t(apply(AvgExp_SCT, 1, scale))
+colnames(AvgExp_scale) <- colnames(AvgExp_SCT)
+AvgExp_scale <- AvgExp_scale %>% na.omit() %>% as.data.frame()
+
+# filter to Luminal MYC 1 ligands
+AvgExp_FibTimp1 <- filter(AvgExp_scale, rownames(AvgExp_scale) %in% signaling_FibTimp1_top$Ligand) %>% 
+   as.matrix() %>% t()
+
+# colors
+RdYlBu <- brewer.pal(6, "RdYlBu")
+
+# cluster order
+cluster_order <- c("Basal","Luminal", "Reactive Luminal", "Luminal MYC 1" , 
+                   "Fibroblasts Interstitial", "Fibroblasts Subglandular", "Fibroblasts Timp1", 
+                    "Macrophages")
+
+rownames(AvgExp_FibTimp1)
+
+# complex heatmap 
+Heatmap(AvgExp_FibTimp1,
+        show_column_dend = FALSE,
+        show_row_dend = FALSE,
+        row_order = cluster_order,
+        column_title = "Expression of Ligands Targeting Fibroblast Timp1 Cluster",
+        col = rev(RdYlBu),
+        row_names_gp = gpar(fontsize = 12),
+        row_names_side = "left",
+       column_names_rot = 45,
+       heatmap_legend_param = list(
+    title = "Z-score",
+    legend_height = unit(4, "cm")
+))
+
+```
+
+ligands of receptors that positive correlate with TF activation
+```{r}
+library(stringr)
+FibTimp1_TF <- dom_object@linkages[["clust_tf"]][["Fibroblasts Timp1"]]
+
+lig_receptor <- dom_object@linkages[["rec_lig"]]
+lig_receptor <- lapply(X = lig_receptor, paste, collapse = ",")
+lig_receptor_df <- unlist(lig_receptor) %>% as.data.frame()
+
+correlations_tf <- dom_object@cor %>% as.data.frame() 
+correlations_tf_t <- t(correlations_tf) %>% as.data.frame()
+cor_tf_MacTrem2 <- correlations_tf_t %>% filter(rownames(correlations_tf_t) %in% FibTimp1_TF) %>% t() %>% as.data.frame() %>% rownames_to_column("receptor")
+
+signaling_FibTimp1_top$Ligand
+FibTimp1_TF
+
+# Ligands for receptors
+receptors_osm <- lig_receptor_df %>% filter(str_detect(., "Osm")) %>% rownames()
+receptors_Cd72 <- lig_receptor_df %>% filter(str_detect(., "Cd72")) %>% rownames()
+receptors_Ptprc <- lig_receptor_df %>% filter(str_detect(.,  "Ptprc" )) %>% rownames()
+receptors_Tnf <- lig_receptor_df %>% filter(str_detect(., "Tnf")) %>% rownames()
+receptors_Tgfb1 <- lig_receptor_df %>% filter(str_detect(., "Tgfb1")) %>% rownames()
+
+receptors <- c(receptors_osm, receptors_Cd72, receptors_Ptprc, receptors_Tnf, receptors_Tgfb1)
+
+cor_tf_lr <- cor_tf_MacTrem2 %>% filter(receptor %in% receptors) %>% column_to_rownames("receptor") %>% t()
+
+# load stroma seurat object
+mouse_seurat_stroma <- readRDS(file = "seurat_stroma.rds")
+
+DimPlot(mouse_seurat_stroma, label = TRUE, raster = TRUE, label.size = 6, pt.size = 2) + NoLegend() + ggtitle("Mouse Stroma Clusters") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# expression of receptors for TGFB1 in stroma cells
+FeaturePlot(mouse_seurat_stroma, features = c(receptors_Tgfb1[1:4]), order = TRUE, raster = TRUE, pt.size = 2)
+```
+
+transcription factor upregulated in Fibroblast Timp1
+```{r}
+library(stringr)
+
+correlations_tf <- dom_object@cor %>% as.data.frame()
+cor_Tf_receptors <- correlations_tf %>% filter(rownames(correlations_tf) %in% c(receptors)) %>% t() %>% as.data.frame() %>% rownames_to_column("TF")
+
+# filter for TFs upregulated in FibTimp1
+cor_Tf_FibTimp1 <- cor_Tf_receptors %>% filter(TF %in% FibTimp1_TF) %>% column_to_rownames("TF") %>% as.matrix()
+
+# transcription factors with Col1a1, Col1a2 and Col3a1, col5a2 downstream
+dom_object@linkages[["tf_targets"]][["Egr2"]] %>% as.data.frame() %>% filter(str_detect(., "Col")) #Col1a1, Col1a2
+dom_object@linkages[["tf_targets"]][["Wt1"]] %>% as.data.frame()%>% filter(str_detect(., "Col"))  #Col1a1, Col1a2
+dom_object@linkages[["tf_targets"]][["Pgr"]] %>% as.data.frame()%>% filter(str_detect(., "Col")) #none
+dom_object@linkages[["tf_targets"]][["Nfatc1"]] %>% as.data.frame()%>% filter(str_detect(., "Col"))#Col1a1
+dom_object@linkages[["tf_targets"]][["Egr4"]] %>% as.data.frame()%>% filter(str_detect(., "Col"))#Col1a1, Col1a2, Col3a1, Col5a2
+dom_object@linkages[["tf_targets"]][["Deaf1"]] %>% as.data.frame()%>% filter(str_detect(., "Col"))#none
+dom_object@linkages[["tf_targets"]][["Bmyc"]] %>% as.data.frame()%>% filter(str_detect(., "Col"))#Col1a1, Col1a2
+dom_object@linkages[["tf_targets"]][["Glis2"]] %>% as.data.frame()%>% filter(str_detect(., "Col"))#Col1a1
+dom_object@linkages[["tf_targets"]][["Gli1"]] %>% as.data.frame()%>% filter(str_detect(., "Col"))#none
+dom_object@linkages[["tf_targets"]][["Cebpe"]] %>% as.data.frame()%>% filter(str_detect(., "Col"))#none
+
+# Timp1 downstream of TF
+dom_object@linkages[["tf_targets"]][["Egr2"]] %>% as.data.frame() %>% filter(str_detect(., "Timp1")) #
+dom_object@linkages[["tf_targets"]][["Wt1"]] %>% as.data.frame()%>% filter(str_detect(., "Timp1"))  
+dom_object@linkages[["tf_targets"]][["Pgr"]] %>% as.data.frame()%>% filter(str_detect(., "Timp1")) 
+dom_object@linkages[["tf_targets"]][["Nfatc1"]] %>% as.data.frame()%>% filter(str_detect(., "Timp1"))
+dom_object@linkages[["tf_targets"]][["Egr4"]] %>% as.data.frame()%>% filter(str_detect(., "Timp1")) #
+dom_object@linkages[["tf_targets"]][["Deaf1"]] %>% as.data.frame()%>% filter(str_detect(., "Timp1"))
+dom_object@linkages[["tf_targets"]][["Bmyc"]] %>% as.data.frame()%>% filter(str_detect(., "Timp1")) #
+dom_object@linkages[["tf_targets"]][["Glis2"]] %>% as.data.frame()%>% filter(str_detect(., "Timp1"))
+dom_object@linkages[["tf_targets"]][["Gli1"]] %>% as.data.frame()%>% filter(str_detect(., "Timp1"))
+dom_object@linkages[["tf_targets"]][["Cebpe"]] %>% as.data.frame()%>% filter(str_detect(., "Timp1"))
+
+```
+
+make heatmap of correlation plot
+```{r}
+# colors
+BrBG <- brewer.pal(6, "BrBG")
+
+# complex heatmap
+ Heatmap(cor_Tf_FibTimp1,
+        show_column_dend = FALSE,
+        show_row_dend = FALSE,
+        column_title = "Correlation of TFs and Receptors",
+        col = BrBG,
+        row_names_gp = gpar(fontsize = 12),
+       column_names_rot = 45,
+       row_names_side = "left",
+       heatmap_legend_param = list(
+    title = "Correlation",
+    legend_height = unit(4, "cm")
+))
+
+```

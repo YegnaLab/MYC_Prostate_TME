@@ -1,0 +1,396 @@
+---
+title: "BMPC mice prostate GSEA"
+author: "Mindy Kim Graham"
+date: "2/06/2024"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# single cell analysis of mouse prostate (WT and BMPC)
+Here we merge libraries from the FVB mice aged 6 months (AP, DP, LP, VP) and 10 months (DP, LP), and BMPC mice aged 12 week (AP, DP, LP, VP) and 6 month (lymph node met) BMPC.
+
+At 6 months, HiMYC FVB mice predominately have PIN in DLV, while at 10 months DL lobes have significant invasive carcinoma.
+At 3 months, BMPC mice predominately have PIN, predominately in AP, while at 6 months, metastasis is visible
+https://aacrjournals.org/cancerres/article/76/2/283/613869/Combined-MYC-Activation-and-Pten-Loss-Are
+
+Cell intrinsic changes during malignant transformation
+```{r}
+# Libraries
+library(Seurat)
+library(ggplot2)
+library(sctransform)
+library(glmGamPoi)
+library(dplyr)
+library(DataCombine)
+library(viridis)
+library(tidyverse)
+library(patchwork)
+library(wesanderson)
+
+pal5 <- wes_palette("Zissou1", 5, "continuous")
+pal6 <- wes_palette("Zissou1", 6, "continuous")
+
+# set working directory
+wrkdir <- "C:/Users/mgraha21/OneDrive - Johns Hopkins/Mindy JHMI Onedrive/MYC prostate scRNAseq/Manuscript Version of Analysis/Github uploads" #update specific to user
+setwd(wrkdir)
+
+```
+
+# Load seurat object
+```{r}
+# load seurat object
+seurat.integrated <- readRDS(file = "seurat_BMPC_integ.rds")
+levels(seurat.integrated)
+
+# subset to luminal cells
+luminal_seurat <- subset(seurat.integrated, idents = "Luminal")
+```
+
+
+# GSEA luminal HiMYC 6 months Luminal vs BMPC 3mo
+```{r}
+library(DataCombine)
+library(msigdbr)
+library(presto)
+library(fgsea)
+
+# select hallmark geneset
+hallmark_gene_sets <- msigdbr(species = "mouse", category = "H")
+fgsea_sets<- hallmark_gene_sets %>% split(x = .$gene_symbol, f = .$gs_name)
+```
+6 month WT and 3 month BMPC luminal cells
+Presto performs a fast Wilcoxon rank sum test and auROC analysis. 
+```{r}
+Idents(luminal_seurat) <- "genotype_age"
+levels(luminal_seurat)
+
+BMPC_3mo <- wilcoxauc(X = luminal_seurat, group_by = 'genotype_age', seurat_assay = 'SCT', assay = 'data', groups_use = c("WT 6mo", "BMPC 3mo"))
+head(BMPC_3mo)
+
+# saveRDS(BMPC_3mo, file = "GSEABMPC_3mo.rds")
+
+# we have all the genes for each cluster
+dplyr::count(BMPC_3mo, group)
+
+# check of the gene-level statistic following wilcox rank sum test and auROC analysis 
+BMPC_3mo %>%
+  dplyr::filter(group == "BMPC 3mo") %>%
+  arrange(desc(logFC), desc(statistic)) %>%
+  head(n = 10)
+
+BMPC_3mo %>%
+  dplyr::filter(group == "BMPC 3mo") %>%
+  arrange(desc(logFC), desc(statistic)) %>%
+  tail(n = 10)
+
+# select only the feature and statistic columns for fgsea
+BMPC_3mo_group<- BMPC_3mo %>%
+  dplyr::filter(group == "BMPC 3mo") %>%
+  arrange(desc(statistic)) %>% 
+  dplyr::select(feature, statistic)
+
+ranks_BMPC3mo<- deframe(BMPC_3mo_group)
+head(ranks_BMPC3mo)
+tail(ranks_BMPC3mo)
+
+# perform analysis
+fgseaRes_BMPC3mo <- fgsea(fgsea_sets, stats = ranks_BMPC3mo)
+
+# save results
+# saveRDS(fgseaRes_BMPC3mo, file = "fgseaRes_BMPC3mo.rds")
+
+
+# tidy the data
+fgseaResTidy_BMPC3mo <- fgseaRes_BMPC3mo %>%
+  as_tibble() %>%
+  arrange(padj)
+
+# add statistic
+fgseaResTidy_BMPC3mo$statistic <- -log10(fgseaResTidy_BMPC3mo$padj)
+
+# add comparison
+fgseaResTidy_BMPC3mo$comparison <- "Luminal WT vs BMPC 3mo"
+
+```
+# GSEA luminal BMPC 3 months vs 6 month met
+Differential expression analysis for ranked list and GSEA for Hallmark
+Presto performs a fast Wilcoxon rank sum test and auROC analysis. 
+```{r}
+levels(luminal_seurat)
+BMPC_6mo <- wilcoxauc(X = luminal_seurat, group_by = 'genotype_age', seurat_assay = 'SCT', assay = 'data', groups_use = c("BMPC Met 6mo", "BMPC 3mo"))
+head(BMPC_6mo)
+
+# saveRDS(BMPC_6mo, file = "GSEABMPC_6mo.rds")
+
+# we have all the genes for each cluster
+dplyr::count(BMPC_6mo, group)
+
+# check of the gene-level statistic following wilcox rank sum test and auROC analysis 
+BMPC_6mo %>%
+  dplyr::filter(group == "BMPC Met 6mo") %>%
+  arrange(desc(logFC), desc(statistic)) %>%
+  head(n = 10)
+
+BMPC_6mo %>%
+  dplyr::filter(group == "BMPC Met 6mo") %>%
+  arrange(desc(logFC), desc(statistic)) %>%
+  tail(n = 10)
+
+# select only the feature and statistic columns for fgsea
+BMPC_6mo_group<- BMPC_6mo %>%
+  dplyr::filter(group == "BMPC Met 6mo") %>%
+  arrange(desc(statistic)) %>% 
+  dplyr::select(feature, statistic)
+
+ranks_BMPC6mo<- deframe(BMPC_6mo_group)
+head(ranks_BMPC6mo)
+tail(ranks_BMPC6mo)
+
+# perform analysis
+fgseaRes_BMPC6mo <- fgsea(fgsea_sets, stats = ranks_BMPC6mo)
+
+# save results
+# saveRDS(fgseaRes_BMPC6mo, file = "fgseaRes_BMPC6mo.rds")
+
+# tidy the data
+fgseaResTidy_BMPC6mo <- fgseaRes_BMPC6mo %>%
+  as_tibble() %>%
+  arrange(padj)
+
+# add statistic
+fgseaResTidy_BMPC6mo$statistic <- -log10(fgseaResTidy_BMPC6mo$padj)
+
+# add comparison
+fgseaResTidy_BMPC6mo$comparison <- "Luminal BMPC 3mo vs BMPC met 6mo"
+
+```
+
+# Compare changes from precursor to metastasis
+```{r}
+library(forcats)
+
+# combine fgsea dataframes
+fgsea_combineDF <- rbind(fgseaResTidy_BMPC6mo,fgseaResTidy_BMPC3mo)
+fgsea_combineDF <- fgsea_combineDF %>% group_by(pathway) %>% 
+  mutate(NES_diff=NES-lag(NES))
+
+# top changes
+fgsea_diff_top <- fgsea_combineDF %>% arrange(desc(abs(NES_diff))) %>% head(20)
+
+fgsea_diff_met <- fgseaResTidy_BMPC6mo %>% filter(pathway %in% fgsea_diff_top$pathway)
+
+## only plot the top pathway differences
+pal3 <- rev(c("#0081a7", "#f07167"))
+
+ggplot(fgsea_combineDF %>% filter(pathway %in% rev(fgsea_diff_top$pathway)),
+       aes(x = fct_inorder(pathway), NES)) +
+  geom_col(aes(fill= comparison),width=.5, position = "dodge") +
+  coord_flip() +
+  labs(x="Pathway", y="Normalized Enrichment Score",
+       title="Top Pathway Changes during MYC with PTEN loss driven cancer progression") + 
+  theme_classic() + labs(fill =  expression("Cluster Comparison")) +
+  scale_fill_manual(values=pal3)
+
+
+```
+
+Top 20 leading edge genes
+```{r}
+
+# TNFA leading edge
+leadingEdge_TNFA_late <- fgseaRes_BMPC6mo %>% filter(pathway == "HALLMARK_TNFA_SIGNALING_VIA_NFKB") %>% select(leadingEdge) %>% unlist() %>% as.data.frame() %>% head(20)
+
+# interferon gamma leading edge
+leadingEdge_ifng_late <- fgseaRes_BMPC6mo %>% filter(pathway == "HALLMARK_INTERFERON_GAMMA_RESPONSE") %>% select(leadingEdge) %>% unlist() %>% as.data.frame() %>% head(20)
+
+# interferon alpha leading edge
+leadingEdge_ifna_late <- fgseaRes_BMPC6mo %>% filter(pathway == "HALLMARK_INTERFERON_ALPHA_RESPONSE") %>% select(leadingEdge) %>% unlist() %>% as.data.frame() %>% head(20)
+
+# Inflammatory leading edge
+leadingEdge_inflame_late <- fgseaRes_BMPC6mo %>% filter(pathway == "HALLMARK_INFLAMMATORY_RESPONSE") %>% select(leadingEdge) %>% unlist() %>% as.data.frame() %>% head(20)
+
+# IL6 leading edge
+leadingEdge_IL6_late <- fgseaRes_BMPC6mo %>% filter(pathway == "HALLMARK_IL6_JAK_STAT3_SIGNALING") %>% select(leadingEdge) %>% unlist() %>% as.data.frame() %>% head(20)
+
+# IL2 leading edge
+leadingEdge_IL2_late <- fgseaRes_BMPC6mo %>% filter(pathway == "HALLMARK_IL2_STAT5_SIGNALING") %>% select(leadingEdge) %>% unlist() %>% as.data.frame() %>% head(20)
+
+
+```
+
+heatmap of key pathways
+```{r}
+# complex heatmap
+library(tidyverse)
+library(RColorBrewer)
+library(ComplexHeatmap)
+library(wesanderson)
+
+# expression matrix
+Idents(luminal_seurat) <- "genotype_age"
+levels(luminal_seurat)
+AvgExp <- subset(luminal_seurat, idents = c("WT 6mo", "WT 10mo", "BMPC 3mo", "BMPC Met 6mo")) %>% AverageExpression()
+AvgExp_SCT <- AvgExp$SCT
+
+# row standardization
+AvgExp_scale <- t(apply(AvgExp_SCT, 1, scale))
+colnames(AvgExp_scale) <- colnames(AvgExp_SCT)
+AvgExp_scale <- AvgExp_scale %>% na.omit() %>% as.data.frame()
+
+# saveRDS(AvgExp_scale, file = "AvgExp_scale.rds")
+
+# filter expression heatmap to leading edge genes
+AvgExp_tnfa <- filter(AvgExp_scale, rownames(AvgExp_scale) %in% c(leadingEdge_TNFA_late$.)) %>% arrange(`BMPC Met 6mo`) %>% as.matrix()
+tnfa_gene_order <- rownames(AvgExp_tnfa)
+
+AvgExp_Ifng <- filter(AvgExp_scale, rownames(AvgExp_scale) %in% c(leadingEdge_ifng_late$.)) %>% arrange(`BMPC Met 6mo`) %>% as.matrix()
+Ifng_gene_order <- rownames(AvgExp_Ifng)
+
+AvgExp_Ifna <- filter(AvgExp_scale, rownames(AvgExp_scale) %in% c(leadingEdge_ifna_late$.)) %>% arrange(`BMPC Met 6mo`) %>% as.matrix()
+Ifna_gene_order <- rownames(AvgExp_Ifna)
+
+AvgExp_inflame <- filter(AvgExp_scale, rownames(AvgExp_scale) %in% c(leadingEdge_inflame_late$.)) %>% arrange(`BMPC Met 6mo`) %>% as.matrix()
+inflame_gene_order <- rownames(AvgExp_inflame)
+
+AvgExp_IL6 <- filter(AvgExp_scale, rownames(AvgExp_scale) %in% c(leadingEdge_IL6_late$.)) %>% arrange(`BMPC Met 6mo`) %>% as.matrix()
+IL6_gene_order <- rownames(AvgExp_IL6)
+
+AvgExp_IL2 <- filter(AvgExp_scale, rownames(AvgExp_scale) %in% c(leadingEdge_IL2_late$.)) %>% arrange(`BMPC Met 6mo`) %>% as.matrix()
+IL2_gene_order <- rownames(AvgExp_IL2)
+
+# sample order
+sample_order <- c("WT 6mo", "WT 10mo", "BMPC 3mo", "BMPC Met 6mo")
+
+# sort by z score of Luminal MYC 1 9 month for column order, concatenate for top 20 of each leading edge pathway
+pal <- wes_palette("Zissou1", 6, type = "continuous")
+
+# complex heatmap
+TNFA <- Heatmap(AvgExp_tnfa,
+               name = "TNFA",
+        column_order = sample_order,
+        row_order = tnfa_gene_order,
+        row_dend_reorder = FALSE,
+        show_row_dend = FALSE,
+        show_column_dend = FALSE,
+        row_names_side = "right",
+       row_title = paste("TNFA SIGNALING VIA NFKB\nNES = ",  round(fgsea_diff_met[1, 6], 2), 
+                          ", adj P-value = ", signif(fgsea_diff_met[1, 3], 3), sep = ""), 
+       #row_title_gp = gpar(fill = pal[1], col = "white", border = NA, fontface = "bold"),
+        row_names_gp = gpar(fontsize = 12),
+        column_names_rot = 45,
+        heatmap_legend_param = list(
+          title = "Z-score",
+          legend_height = unit(4, "cm")
+        ))
+
+TNFA
+
+Ifng <- Heatmap(AvgExp_Ifng,
+                name = "Ifng",
+                column_order = sample_order,
+                row_order = Ifng_gene_order,
+                row_dend_reorder = FALSE,
+                show_row_dend = FALSE,
+                show_column_dend = FALSE,
+                row_names_side = "right",
+               row_title = paste("INTERFERON GAMMA\nNES = ",  round(fgsea_diff_met[2, 6], 2), 
+                                     ", adj P-value = ", signif(fgsea_diff_met[2, 3], 3), sep = ""), 
+               #row_title_gp = gpar(fill = pal[2], col = "white", border = NA, fontface = "bold"),
+                row_names_gp = gpar(fontsize = 12),
+                column_names_rot = 45,
+                heatmap_legend_param = list(
+                  title = "Z-score",
+                  legend_height = unit(4, "cm")
+                ))
+
+Ifng
+
+
+Ifna <- Heatmap(AvgExp_Ifna,
+                name = "Ifna",
+                column_order = sample_order,
+                row_order = Ifna_gene_order,
+                row_dend_reorder = FALSE,
+                show_row_dend = FALSE,
+                show_column_dend = FALSE,
+                row_names_side = "right",
+               row_title = paste("INTERFERON ALPHA\nNES = ",  round(fgsea_diff_met[3, 6], 2), 
+                                     ", adj P-value = ", signif(fgsea_diff_met[3, 3], 3), sep = ""), 
+               #row_title_gp = gpar(fill = pal[3], col = "white", border = NA, fontface = "bold"),
+                row_names_gp = gpar(fontsize = 12),
+                column_names_rot = 45,
+                heatmap_legend_param = list(
+                  title = "Z-score",
+                  legend_height = unit(4, "cm")
+                ))
+
+Ifna
+
+inflame <- Heatmap(AvgExp_inflame,
+                name = "inflame",
+                column_order = sample_order,
+                row_order = inflame_gene_order,
+                row_dend_reorder = FALSE,
+                show_row_dend = FALSE,
+                show_column_dend = FALSE,
+                row_names_side = "right",
+               row_title = paste("INFLAMMATORY RESPONSE\nNES = ",  round(fgsea_diff_met[6, 6], 2), 
+                                     ", adj P-value = ", signif(fgsea_diff_met[6, 3], 3), sep = ""), 
+               #row_title_gp = gpar(fill = pal[4], col = "white", border = NA, fontface = "bold"),
+                row_names_gp = gpar(fontsize = 12),
+                column_names_rot = 45,
+                heatmap_legend_param = list(
+                  title = "Z-score",
+                  legend_height = unit(4, "cm")
+                ))
+
+inflame
+
+
+IL2 <- Heatmap(AvgExp_IL2,
+                name = "IL2",
+                column_order = sample_order,
+                row_order = IL2_gene_order,
+                row_dend_reorder = FALSE,
+                show_row_dend = FALSE,
+                show_column_dend = FALSE,
+                row_names_side = "right",
+               row_title = paste("IL2 JAK STAT5 SIGNALING\nNES = ",  round(fgsea_diff_met[8, 6], 2), 
+                                     ", adj P-value = ", signif(fgsea_diff_met[8, 3], 3), sep = ""), 
+               #row_title_gp = gpar(fill = pal[5], col = "white", border = NA, fontface = "bold"),
+                row_names_gp = gpar(fontsize = 12),
+                column_names_rot = 45,
+                heatmap_legend_param = list(
+                  title = "Z-score",
+                  legend_height = unit(4, "cm")
+                ))
+
+IL2
+
+IL6 <- Heatmap(AvgExp_IL6,
+                name = "IL6",
+                column_order = sample_order,
+                row_order = IL6_gene_order,
+                row_dend_reorder = FALSE,
+                show_row_dend = FALSE,
+                show_column_dend = FALSE,
+                row_names_side = "right",
+               row_title = paste("IL6 JAK STAT3 SIGNALING\nNES = ",  round(fgsea_diff_met[11, 6], 2), 
+                                     ", adj P-value = ", signif(fgsea_diff_met[11, 3], 3), sep = ""), 
+               #row_title_gp = gpar(fill = pal[6], col = "white", border = NA, fontface = "bold"),
+                row_names_gp = gpar(fontsize = 12),
+                column_names_rot = 45,
+                heatmap_legend_param = list(
+                  title = "Z-score",
+                  legend_height = unit(4, "cm")
+                ))
+
+IL6
+
+```
+
