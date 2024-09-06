@@ -2,7 +2,8 @@
 Code for the analysis performed in study "Convergent alterations in the tumor microenvironment of MYC-driven human and murine prostate cancer"  
 https://www.nature.com/articles/s41467-024-51450-2  
 
-Access the knitted HTML files here: https://github.com/YegnaLab/MYC_Prostate_TME/tree/main/HTML
+Access the knitted HTML files here:  
+https://github.com/YegnaLab/MYC_Prostate_TME/tree/main/HTML
 
 To access the mouse data, go to:  
 https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE228945  
