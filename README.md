@@ -8,5 +8,5 @@ https://github.com/YegnaLab/MYC_Prostate_TME/tree/main/HTML
 To access the mouse data, go to:  
 https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE228945  
 
-To access the human scRNA-seq data, go to:
+To access the human scRNA-seq data, go to:  
 https://www.ncbi.nlm.nih.gov/projects/gap/cgi-bin/study.cgi?study_id=phs003480.v1.p1
